@@ -38,7 +38,6 @@ describe('App peer-keyed message routing', () => {
       onSendProgress: vi.fn(),
     };
 
-    // @ts-expect-error — test-time injection of contextBridge API
     window.liminn = liminn;
   });
 
