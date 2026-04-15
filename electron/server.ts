@@ -1,0 +1,133 @@
+import express from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import http from 'http';
+
+export interface ReceivedText {
+  id: string;
+  from: string;
+  text: string;
+  timestamp: number;
+}
+
+export interface ReceivedFile {
+  id: string;
+  from: string;
+  filename: string;
+  size: number;
+  path: string;
+  timestamp: number;
+}
+
+type OnTextReceived = (item: ReceivedText) => void;
+type OnFileReceived = (item: ReceivedFile) => void;
+
+export class TransferServer {
+  private app: express.Application;
+  private server: http.Server | null = null;
+  private receivedDir: string;
+  private onTextReceived: OnTextReceived | null = null;
+  private onFileReceived: OnFileReceived | null = null;
+
+  constructor() {
+    this.app = express();
+    this.receivedDir = path.join(os.homedir(), 'LANDrop Received');
+
+    if (!fs.existsSync(this.receivedDir)) {
+      fs.mkdirSync(this.receivedDir, { recursive: true });
+    }
+
+    this.setupRoutes();
+  }
+
+  private setupRoutes(): void {
+    this.app.use(express.json({ limit: '50mb' }));
+
+    const storage = multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, this.receivedDir),
+      filename: (_req, file, cb) => {
+        const ext = path.extname(file.originalname);
+        const base = path.basename(file.originalname, ext);
+        let finalName = file.originalname;
+        let counter = 1;
+        while (fs.existsSync(path.join(this.receivedDir, finalName))) {
+          finalName = `${base} (${counter})${ext}`;
+          counter++;
+        }
+        cb(null, finalName);
+      },
+    });
+    const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 * 1024 } });
+
+    this.app.post('/api/text', (req, res) => {
+      const { from, text } = req.body;
+      if (!text) {
+        res.status(400).json({ error: 'No text provided' });
+        return;
+      }
+      const item: ReceivedText = {
+        id: `txt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        from: from || 'Unknown',
+        text,
+        timestamp: Date.now(),
+      };
+      if (this.onTextReceived) this.onTextReceived(item);
+      res.json({ ok: true });
+    });
+
+    this.app.post('/api/file', upload.single('file'), (req, res) => {
+      if (!req.file) {
+        res.status(400).json({ error: 'No file provided' });
+        return;
+      }
+      const item: ReceivedFile = {
+        id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        from: (req.body as Record<string, string>)?.from || 'Unknown',
+        filename: req.file.filename,
+        size: req.file.size,
+        path: req.file.path,
+        timestamp: Date.now(),
+      };
+      if (this.onFileReceived) this.onFileReceived(item);
+      res.json({ ok: true });
+    });
+
+    this.app.get('/api/ping', (_req, res) => {
+      res.json({ ok: true });
+    });
+  }
+
+  onText(callback: OnTextReceived): void {
+    this.onTextReceived = callback;
+  }
+
+  onFile(callback: OnFileReceived): void {
+    this.onFileReceived = callback;
+  }
+
+  start(port: number): Promise<number> {
+    return new Promise((resolve, reject) => {
+      this.server = this.app.listen(port, '0.0.0.0', () => {
+        const addr = this.server?.address();
+        if (addr && typeof addr === 'object') {
+          resolve(addr.port);
+        } else {
+          reject(new Error('Failed to get server address'));
+        }
+      });
+      this.server.on('error', reject);
+    });
+  }
+
+  stop(): void {
+    if (this.server) {
+      this.server.close();
+    }
+  }
+
+  getReceivedDir(): string {
+    return this.receivedDir;
+  }
+}
