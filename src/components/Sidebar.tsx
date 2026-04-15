@@ -46,7 +46,7 @@ export default function Sidebar({ peers, selectedPeer, onSelectPeer, deviceName,
             </svg>
           </div>
           <div className="app-title">
-            <h1>LANDrop</h1>
+            <h1>Liminn</h1>
             <span className="device-name">{deviceName}</span>
           </div>
         </div>
@@ -66,7 +66,7 @@ export default function Sidebar({ peers, selectedPeer, onSelectPeer, deviceName,
               <div className="scan-ring delay" />
             </div>
             <p>Scanning network...</p>
-            <p className="hint">Other devices running LANDrop will appear here</p>
+            <p className="hint">Other devices running Liminn will appear here</p>
           </div>
         ) : (
           peers.map((peer) => (
@@ -106,7 +106,7 @@ export default function Sidebar({ peers, selectedPeer, onSelectPeer, deviceName,
       <div className="sidebar-footer">
         <button
           className="open-folder-btn"
-          onClick={() => window.landrop?.openReceivedFolder()}
+          onClick={() => window.liminn?.openReceivedFolder()}
           title="Open received files folder"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -20,7 +20,7 @@ function createWindow(): void {
     height: 750,
     minWidth: 800,
     minHeight: 600,
-    title: 'LANDrop',
+    title: 'Liminn',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: '#0f0a1e',
@@ -97,7 +97,7 @@ function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
     const fileName = path.basename(filePath);
     const fileStream = fs.createReadStream(filePath);
     const fileSize = fs.statSync(filePath).size;
-    const boundary = `----LANDrop${Date.now()}`;
+    const boundary = `----Liminn${Date.now()}`;
 
     const header = Buffer.from(
       `--${boundary}\r\n` +

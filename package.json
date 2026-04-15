@@ -1,5 +1,5 @@
 {
-  "name": "landrop",
+  "name": "liminn",
   "version": "1.0.0",
   "description": "Share text and files across your local network",
   "main": "dist-electron/main.js",
@@ -12,8 +12,8 @@
     "start": "tsc -p tsconfig.electron.json && electron ."
   },
   "build": {
-    "appId": "com.landrop.app",
-    "productName": "LANDrop",
+    "appId": "com.liminn.app",
+    "productName": "Liminn",
     "files": [
       "dist/**/*",
       "dist-electron/**/*"

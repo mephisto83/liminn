@@ -21,7 +21,7 @@ interface ToastData {
   type: 'success' | 'info' | 'error';
 }
 
-const isElectron = typeof window !== 'undefined' && window.landrop;
+const isElectron = typeof window !== 'undefined' && window.liminn;
 
 export default function App() {
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -47,14 +47,14 @@ export default function App() {
   useEffect(() => {
     if (!isElectron) return;
 
-    window.landrop.getDeviceName().then(setDeviceName);
-    window.landrop.getPeers().then(setPeers);
+    window.liminn.getDeviceName().then(setDeviceName);
+    window.liminn.getPeers().then(setPeers);
 
-    window.landrop.onPeersUpdated((updatedPeers) => {
+    window.liminn.onPeersUpdated((updatedPeers) => {
       setPeers(updatedPeers);
     });
 
-    window.landrop.onTextReceived((item: ReceivedText) => {
+    window.liminn.onTextReceived((item: ReceivedText) => {
       const peerId = findPeerIdByName(item.from);
       addMessage(peerId || item.from, {
         id: item.id,
@@ -66,7 +66,7 @@ export default function App() {
       addToast(`Message from ${item.from}`, 'info');
     });
 
-    window.landrop.onFileReceived((item: ReceivedFile) => {
+    window.liminn.onFileReceived((item: ReceivedFile) => {
       const peerId = findPeerIdByName(item.from);
       addMessage(peerId || item.from, {
         id: item.id,
@@ -79,7 +79,7 @@ export default function App() {
       addToast(`File received: ${item.filename}`, 'success');
     });
 
-    window.landrop.onSendProgress((progress: SendProgress) => {
+    window.liminn.onSendProgress((progress: SendProgress) => {
       setSendProgress((prev) => ({
         ...prev,
         [progress.peerId]: progress.done ? -1 : progress.percent,
@@ -103,7 +103,7 @@ export default function App() {
 
   const handleSendText = async (text: string) => {
     if (!selectedPeer || !isElectron) return;
-    const result = await window.landrop.sendText(selectedPeer.id, text);
+    const result = await window.liminn.sendText(selectedPeer.id, text);
     if (result.ok) {
       addMessage(selectedPeer.id, {
         id: `sent-${Date.now()}`,
@@ -119,7 +119,7 @@ export default function App() {
 
   const handleSendFile = async () => {
     if (!selectedPeer || !isElectron) return;
-    const result = await window.landrop.sendFile(selectedPeer.id);
+    const result = await window.liminn.sendFile(selectedPeer.id);
     if (result.ok && result.filename) {
       addMessage(selectedPeer.id, {
         id: `sent-${Date.now()}`,

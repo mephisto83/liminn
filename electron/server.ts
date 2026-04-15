@@ -33,7 +33,7 @@ export class TransferServer {
 
   constructor() {
     this.app = express();
-    this.receivedDir = path.join(os.homedir(), 'LANDrop Received');
+    this.receivedDir = path.join(os.homedir(), 'Liminn Received');
 
     if (!fs.existsSync(this.receivedDir)) {
       fs.mkdirSync(this.receivedDir, { recursive: true });

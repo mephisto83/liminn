@@ -29,7 +29,7 @@ export interface SendProgress {
   done: boolean;
 }
 
-export interface LanDropAPI {
+export interface LiminnAPI {
   getPeers: () => Promise<Peer[]>;
   sendText: (peerId: string, text: string) => Promise<{ ok: boolean; error?: string }>;
   sendFile: (peerId: string) => Promise<{ ok: boolean; error?: string; filename?: string }>;
@@ -45,6 +45,6 @@ export interface LanDropAPI {
 
 declare global {
   interface Window {
-    landrop: LanDropAPI;
+    liminn: LiminnAPI;
   }
 }

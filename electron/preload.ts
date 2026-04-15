@@ -9,7 +9,7 @@ export interface PeerInfo {
   platform: string;
 }
 
-contextBridge.exposeInMainWorld('landrop', {
+contextBridge.exposeInMainWorld('liminn', {
   getPeers: () => ipcRenderer.invoke('get-peers'),
   sendText: (peerId: string, text: string) => ipcRenderer.invoke('send-text', peerId, text),
   sendFile: (peerId: string) => ipcRenderer.invoke('send-file', peerId),

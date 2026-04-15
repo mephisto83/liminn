@@ -20,7 +20,7 @@ export class Discovery {
   private onPeersChanged: PeerCallback | null = null;
   private servicePort: number;
   private deviceName: string;
-  private serviceType = 'landrop';
+  private serviceType = 'liminn';
 
   constructor(port: number, deviceName?: string) {
     this.bonjour = new Bonjour();

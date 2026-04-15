@@ -21,7 +21,7 @@ export default function EmptyState({ peerCount }: Props) {
             </defs>
           </svg>
         </div>
-        <h2>Welcome to LANDrop</h2>
+        <h2>Welcome to Liminn</h2>
         <p className="empty-desc">
           {peerCount === 0
             ? 'Waiting for other devices on your network...'
