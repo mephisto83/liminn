@@ -8,6 +8,13 @@ import http from 'http';
 export interface ReceivedText {
   id: string;
   from: string;
+  /**
+   * The sender's machineId (stable across their restarts). Forwarded via
+   * the POST body; used by the renderer as the conversation key so a
+   * rename on the other side doesn't fork the thread. Optional because
+   * older peers on the network may not send it.
+   */
+  fromId?: string;
   text: string;
   timestamp: number;
   /**
@@ -23,6 +30,8 @@ export interface ReceivedText {
 export interface ReceivedFile {
   id: string;
   from: string;
+  /** See ReceivedText.fromId. */
+  fromId?: string;
   filename: string;
   size: number;
   path: string;
@@ -81,9 +90,9 @@ export class TransferServer {
     const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 * 1024 } });
 
     this.app.post('/api/text', (req, res) => {
-      const { from, text } = req.body;
+      const { from, fromId, text } = req.body;
       const remoteAddr = normalizeRemoteAddr(req.socket.remoteAddress);
-      console.log(`[recv-text] POST /api/text from=${from} remoteAddr=${remoteAddr} bytes=${text?.length ?? 0}`);
+      console.log(`[recv-text] POST /api/text from=${from} fromId=${fromId ?? '(none)'} remoteAddr=${remoteAddr} bytes=${text?.length ?? 0}`);
       if (!text) {
         console.log('[recv-text] rejected: no text in body');
         res.status(400).json({ error: 'No text provided' });
@@ -92,6 +101,7 @@ export class TransferServer {
       const item: ReceivedText = {
         id: `txt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         from: from || 'Unknown',
+        fromId: typeof fromId === 'string' && fromId.length > 0 ? fromId : undefined,
         text,
         timestamp: Date.now(),
         remoteAddr,
@@ -110,9 +120,12 @@ export class TransferServer {
         res.status(400).json({ error: 'No file provided' });
         return;
       }
+      const body = (req.body as Record<string, string>) || {};
+      const rawFromId = body.fromId;
       const item: ReceivedFile = {
         id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        from: (req.body as Record<string, string>)?.from || 'Unknown',
+        from: body.from || 'Unknown',
+        fromId: typeof rawFromId === 'string' && rawFromId.length > 0 ? rawFromId : undefined,
         filename: req.file.filename,
         size: req.file.size,
         path: req.file.path,

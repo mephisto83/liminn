@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Peer } from '../types';
 
 interface Props {
@@ -6,6 +6,13 @@ interface Props {
   selectedPeer: Peer | null;
   onSelectPeer: (peer: Peer) => void;
   deviceName: string;
+  /**
+   * Persist a new nickname. Resolves `true` on success; the parent owns
+   * the authoritative state and pushes the new name back via
+   * `deviceName`. A resolved `false` means the rename was rejected
+   * (empty, IPC failure, etc.) — we revert the input to `deviceName`.
+   */
+  onRenameDevice: (nextName: string) => Promise<boolean>;
   sendProgress: Record<string, number>;
 }
 
@@ -27,7 +34,49 @@ function getPlatformLabel(platform: string): string {
   }
 }
 
-export default function Sidebar({ peers, selectedPeer, onSelectPeer, deviceName, sendProgress }: Props) {
+export default function Sidebar({
+  peers,
+  selectedPeer,
+  onSelectPeer,
+  deviceName,
+  onRenameDevice,
+  sendProgress,
+}: Props) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(deviceName);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Keep the draft in sync with the canonical deviceName when we're not
+  // actively editing — otherwise a remote-origin rename (or the initial
+  // load resolving) would appear to overwrite the user's in-progress edit.
+  useEffect(() => {
+    if (!editing) setDraft(deviceName);
+  }, [deviceName, editing]);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  const commit = async () => {
+    const trimmed = draft.trim();
+    if (!trimmed || trimmed === deviceName) {
+      setDraft(deviceName);
+      setEditing(false);
+      return;
+    }
+    const ok = await onRenameDevice(trimmed);
+    if (!ok) setDraft(deviceName);
+    setEditing(false);
+  };
+
+  const cancel = () => {
+    setDraft(deviceName);
+    setEditing(false);
+  };
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -47,7 +96,35 @@ export default function Sidebar({ peers, selectedPeer, onSelectPeer, deviceName,
           </div>
           <div className="app-title">
             <h1>Liminn</h1>
-            <span className="device-name">{deviceName}</span>
+            {editing ? (
+              <input
+                ref={inputRef}
+                className="device-name device-name-input"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onBlur={commit}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commit();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancel();
+                  }
+                }}
+                maxLength={60}
+                aria-label="Device nickname"
+              />
+            ) : (
+              <button
+                type="button"
+                className="device-name device-name-button"
+                onClick={() => setEditing(true)}
+                title="Click to rename this device"
+              >
+                {deviceName}
+              </button>
+            )}
           </div>
         </div>
       </div>

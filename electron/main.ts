@@ -4,11 +4,13 @@ import http from 'http';
 import fs from 'fs';
 import { Discovery, Peer } from './discovery';
 import { TransferServer, ReceivedText, ReceivedFile } from './server';
+import { loadIdentity, saveNickname, Identity } from './identity';
 
 let mainWindow: BrowserWindow | null = null;
 let discovery: Discovery | null = null;
 let transferServer: TransferServer | null = null;
 let currentPeers: Peer[] = [];
+let identity: Identity | null = null;
 const receivedTexts: ReceivedText[] = [];
 const receivedFiles: ReceivedFile[] = [];
 
@@ -39,6 +41,10 @@ function createWindow(): void {
 }
 
 async function startServices(): Promise<void> {
+  if (!identity) {
+    throw new Error('startServices called before identity was loaded');
+  }
+
   transferServer = new TransferServer();
   const port = await transferServer.start(SERVER_PORT);
 
@@ -52,7 +58,7 @@ async function startServices(): Promise<void> {
     mainWindow?.webContents.send('file-received', item);
   });
 
-  discovery = new Discovery(port);
+  discovery = new Discovery(port, identity.machineId, identity.nickname);
   discovery.start((peers) => {
     currentPeers = peers;
     mainWindow?.webContents.send('peers-updated', peers);
@@ -62,8 +68,13 @@ async function startServices(): Promise<void> {
 function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
   return new Promise((resolve) => {
     const addr = peer.addresses[0];
+    // `from` is the user-visible nickname (what the other side shows as
+    // the sender label). `fromId` is the machineId — the stable key the
+    // receiver uses to group this message into the conversation, even
+    // if we rename ourselves mid-thread.
     const postData = JSON.stringify({
-      from: discovery?.getDeviceId() ? require('os').hostname() : 'Unknown',
+      from: identity?.nickname ?? require('os').hostname(),
+      fromId: identity?.machineId,
       text,
     });
 
@@ -111,10 +122,15 @@ function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
     const fileSize = fs.statSync(filePath).size;
     const boundary = `----Liminn${Date.now()}`;
 
+    const fromName = identity?.nickname ?? require('os').hostname();
+    const fromId = identity?.machineId ?? '';
     const header = Buffer.from(
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="from"\r\n\r\n` +
-      `${require('os').hostname()}\r\n` +
+      `${fromName}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="fromId"\r\n\r\n` +
+      `${fromId}\r\n` +
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="file"; filename="${fileName}"\r\n` +
       `Content-Type: application/octet-stream\r\n\r\n`,
@@ -176,7 +192,26 @@ function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
 function setupIpc(): void {
   ipcMain.handle('get-peers', () => currentPeers);
 
-  ipcMain.handle('get-device-name', () => require('os').hostname());
+  // get-device-name returns the user-set nickname (the thing advertised
+  // to peers). Falls back to hostname only before identity is loaded,
+  // which shouldn't happen in practice — startServices runs before the
+  // window can invoke anything.
+  ipcMain.handle('get-device-name', () => identity?.nickname ?? require('os').hostname());
+
+  ipcMain.handle('get-nickname', () => identity?.nickname ?? require('os').hostname());
+
+  ipcMain.handle('set-nickname', (_event, nickname: string) => {
+    const trimmed = typeof nickname === 'string' ? nickname.trim() : '';
+    if (!trimmed) return { ok: false, error: 'Nickname cannot be empty' };
+    try {
+      identity = saveNickname(app.getPath('userData'), trimmed);
+      discovery?.setDeviceName(trimmed);
+      return { ok: true, nickname: identity.nickname };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save nickname';
+      return { ok: false, error: message };
+    }
+  });
 
   ipcMain.handle('get-received-items', () => ({
     texts: receivedTexts,
@@ -216,6 +251,11 @@ function setupIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  // Load identity first so any IPC call (get-nickname, get-device-name)
+  // sees the real values, not the hostname fallback. startServices reads
+  // from `identity` for the Discovery constructor.
+  identity = loadIdentity(app.getPath('userData'));
+
   setupIpc();
   createWindow();
   await startServices();

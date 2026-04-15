@@ -10,6 +10,13 @@ export interface Peer {
 export interface ReceivedText {
   id: string;
   from: string;
+  /**
+   * Sender's machineId (stable across their restarts and renames). When
+   * present, it's the canonical conversation key on the receiving side —
+   * threads stay unified even if the sender's nickname changes.
+   * Optional because old senders may not include it.
+   */
+  fromId?: string;
   text: string;
   timestamp: number;
   /**
@@ -22,6 +29,8 @@ export interface ReceivedText {
 export interface ReceivedFile {
   id: string;
   from: string;
+  /** See ReceivedText.fromId. */
+  fromId?: string;
   filename: string;
   size: number;
   path?: string;
@@ -41,6 +50,8 @@ export interface LiminnAPI {
   sendText: (peerId: string, text: string) => Promise<{ ok: boolean; error?: string }>;
   sendFile: (peerId: string) => Promise<{ ok: boolean; error?: string; filename?: string }>;
   getDeviceName: () => Promise<string>;
+  getNickname: () => Promise<string>;
+  setNickname: (nickname: string) => Promise<{ ok: boolean; error?: string; nickname?: string }>;
   getReceivedItems: () => Promise<{ texts: ReceivedText[]; files: ReceivedFile[] }>;
   openFile: (filePath: string) => Promise<void>;
   openReceivedFolder: () => Promise<void>;
