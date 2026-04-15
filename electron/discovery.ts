@@ -99,6 +99,7 @@ export class Discovery {
       let changed = false;
       for (const [id, peer] of this.peers) {
         if (now - peer.lastSeen > 30000) {
+          console.log(`[discovery] evicted stale peer: ${peer.name} (id=${id}, last seen ${Math.round((now - peer.lastSeen) / 1000)}s ago)`);
           this.peers.delete(id);
           changed = true;
         }
