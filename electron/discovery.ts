@@ -26,18 +26,28 @@ export class Discovery {
     this.bonjour = new Bonjour();
     this.servicePort = port;
     this.deviceName = deviceName || os.hostname();
+    this.instanceId = Discovery.generateInstanceId();
   }
 
-  getDeviceId(): string {
+  private instanceId: string;
+
+  private static generateInstanceId(): string {
     const interfaces = os.networkInterfaces();
+    let mac = '';
     for (const name of Object.keys(interfaces)) {
       for (const iface of interfaces[name] || []) {
         if (!iface.internal && iface.mac && iface.mac !== '00:00:00:00:00:00') {
-          return iface.mac;
+          mac = iface.mac;
+          break;
         }
       }
+      if (mac) break;
     }
-    return `${this.deviceName}-${process.pid}`;
+    return `${mac || 'unknown'}-${process.pid}-${Date.now()}`;
+  }
+
+  getDeviceId(): string {
+    return this.instanceId;
   }
 
   start(callback: PeerCallback): void {
@@ -54,7 +64,9 @@ export class Discovery {
       },
     });
 
-    this.browser = this.bonjour.find({ type: this.serviceType }, (service: Service) => {
+    this.browser = this.bonjour.find({ type: this.serviceType });
+
+    this.browser.on('up', (service: Service) => {
       this.addPeer(service);
     });
 
