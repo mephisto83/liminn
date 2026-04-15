@@ -5,12 +5,12 @@ import App from './App';
 import type { Peer, ReceivedText, LiminnAPI } from './types';
 
 /**
- * These tests lock in the peer-routing behavior that regressed earlier —
- * received messages must be stored under the peer's id (from the current
- * peer list), not under the sender's hostname string. Without the ref-based
- * fix in App.tsx, the listener closes over the initial peers=[] and routes
- * messages to messages[item.from] instead of messages[peer.id], and the
- * chat area (which reads messages[selectedPeer.id]) shows nothing.
+ * These tests lock in hostname-keyed message routing. Threads are stored by
+ * hostname (peer.name / item.from) so they survive a peer restart — peer.id
+ * is a per-launch instance identifier that changes whenever the other side
+ * relaunches, and keying by id would split the conversation into a fresh
+ * empty thread every time. Since peer.name and item.from are both the
+ * device hostname, they converge on a single stable key.
  */
 describe('App peer-keyed message routing', () => {
   let peersUpdatedCb: ((peers: Peer[]) => void) | null = null;

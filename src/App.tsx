@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Peer, ReceivedText, ReceivedFile, SendProgress } from './types';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
@@ -24,11 +24,14 @@ interface ToastData {
 export default function App() {
   const [peers, setPeers] = useState<Peer[]>([]);
   const [selectedPeer, setSelectedPeer] = useState<Peer | null>(null);
+  // Keyed by hostname (peer.name / item.from), NOT peer.id — peer.id is a
+  // per-launch instance identifier that changes whenever the other side
+  // restarts, which would split the conversation into a new empty thread
+  // every time. Hostname is stable across restarts.
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [deviceName, setDeviceName] = useState('This Device');
   const [toasts, setToasts] = useState<ToastData[]>([]);
   const [sendProgress, setSendProgress] = useState<Record<string, number>>({});
-  const peersRef = useRef<Peer[]>([]);
 
   const addToast = useCallback((message: string, type: ToastData['type'] = 'info') => {
     const id = `toast-${Date.now()}`;
@@ -36,34 +39,23 @@ export default function App() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
   }, []);
 
-  const addMessage = useCallback((peerId: string, msg: Message) => {
+  const addMessage = useCallback((hostname: string, msg: Message) => {
     setMessages((prev) => ({
       ...prev,
-      [peerId]: [...(prev[peerId] || []), msg],
+      [hostname]: [...(prev[hostname] || []), msg],
     }));
   }, []);
-
-  useEffect(() => {
-    peersRef.current = peers;
-  }, [peers]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.liminn) return;
 
     window.liminn.getDeviceName().then(setDeviceName);
-    window.liminn.getPeers().then((initial) => {
-      peersRef.current = initial;
-      setPeers(initial);
-    });
+    window.liminn.getPeers().then(setPeers);
 
-    window.liminn.onPeersUpdated((updatedPeers) => {
-      peersRef.current = updatedPeers;
-      setPeers(updatedPeers);
-    });
+    window.liminn.onPeersUpdated(setPeers);
 
     window.liminn.onTextReceived((item: ReceivedText) => {
-      const peerId = findPeerIdByName(item.from);
-      addMessage(peerId || item.from, {
+      addMessage(item.from, {
         id: item.id,
         type: 'text-received',
         from: item.from,
@@ -74,8 +66,7 @@ export default function App() {
     });
 
     window.liminn.onFileReceived((item: ReceivedFile) => {
-      const peerId = findPeerIdByName(item.from);
-      addMessage(peerId || item.from, {
+      addMessage(item.from, {
         id: item.id,
         type: 'file-received',
         from: item.from,
@@ -103,16 +94,11 @@ export default function App() {
     });
   }, [addMessage, addToast]);
 
-  function findPeerIdByName(name: string): string | null {
-    const peer = peersRef.current.find((p) => p.name === name);
-    return peer?.id || null;
-  }
-
   const handleSendText = async (text: string) => {
     if (!selectedPeer || !window.liminn) return;
     const result = await window.liminn.sendText(selectedPeer.id, text);
     if (result.ok) {
-      addMessage(selectedPeer.id, {
+      addMessage(selectedPeer.name, {
         id: `sent-${Date.now()}`,
         type: 'text-sent',
         from: deviceName,
@@ -128,7 +114,7 @@ export default function App() {
     if (!selectedPeer || !window.liminn) return;
     const result = await window.liminn.sendFile(selectedPeer.id);
     if (result.ok && result.filename) {
-      addMessage(selectedPeer.id, {
+      addMessage(selectedPeer.name, {
         id: `sent-${Date.now()}`,
         type: 'file-sent',
         from: deviceName,
@@ -141,7 +127,7 @@ export default function App() {
     }
   };
 
-  const peerMessages = selectedPeer ? messages[selectedPeer.id] || [] : [];
+  const peerMessages = selectedPeer ? messages[selectedPeer.name] || [] : [];
 
   return (
     <div className="app">
