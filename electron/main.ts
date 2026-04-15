@@ -67,6 +67,8 @@ function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
       text,
     });
 
+    console.log(`[send-text] POST http://${addr}:${peer.port}/api/text (peer=${peer.name}, bytes=${postData.length})`);
+
     const req = http.request(
       {
         hostname: addr,
@@ -82,10 +84,20 @@ function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
       (res) => {
         let data = '';
         res.on('data', (chunk) => (data += chunk));
-        res.on('end', () => resolve(res.statusCode === 200));
+        res.on('end', () => {
+          console.log(`[send-text] response status=${res.statusCode} body=${data}`);
+          resolve(res.statusCode === 200);
+        });
       },
     );
-    req.on('error', () => resolve(false));
+    req.on('error', (err) => {
+      console.error(`[send-text] request error for ${addr}:${peer.port} ->`, err.message);
+      resolve(false);
+    });
+    req.on('timeout', () => {
+      console.error(`[send-text] request timeout after 10s for ${addr}:${peer.port}`);
+      req.destroy();
+    });
     req.write(postData);
     req.end();
   });

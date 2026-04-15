@@ -63,7 +63,9 @@ export class TransferServer {
 
     this.app.post('/api/text', (req, res) => {
       const { from, text } = req.body;
+      console.log(`[recv-text] POST /api/text from=${from} remoteAddr=${req.socket.remoteAddress} bytes=${text?.length ?? 0}`);
       if (!text) {
+        console.log('[recv-text] rejected: no text in body');
         res.status(400).json({ error: 'No text provided' });
         return;
       }
@@ -73,7 +75,12 @@ export class TransferServer {
         text,
         timestamp: Date.now(),
       };
-      if (this.onTextReceived) this.onTextReceived(item);
+      if (this.onTextReceived) {
+        this.onTextReceived(item);
+        console.log('[recv-text] forwarded to renderer via onTextReceived');
+      } else {
+        console.error('[recv-text] no onTextReceived callback set — event lost!');
+      }
       res.json({ ok: true });
     });
 
