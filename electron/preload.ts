@@ -21,10 +21,10 @@ contextBridge.exposeInMainWorld('liminn', {
   onPeersUpdated: (callback: (peers: PeerInfo[]) => void) => {
     ipcRenderer.on('peers-updated', (_event, peers) => callback(peers));
   },
-  onTextReceived: (callback: (item: { id: string; from: string; text: string; timestamp: number }) => void) => {
+  onTextReceived: (callback: (item: { id: string; from: string; text: string; timestamp: number; remoteAddr?: string }) => void) => {
     ipcRenderer.on('text-received', (_event, item) => callback(item));
   },
-  onFileReceived: (callback: (item: { id: string; from: string; filename: string; size: number; timestamp: number }) => void) => {
+  onFileReceived: (callback: (item: { id: string; from: string; filename: string; size: number; timestamp: number; remoteAddr?: string }) => void) => {
     ipcRenderer.on('file-received', (_event, item) => callback(item));
   },
   onSendProgress: (callback: (progress: { peerId: string; percent: number; done: boolean }) => void) => {

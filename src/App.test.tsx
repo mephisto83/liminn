@@ -91,7 +91,7 @@ describe('App peer-keyed message routing', () => {
     expect(await screen.findByText('hello from alice')).toBeInTheDocument();
   });
 
-  it('falls back to item.from as the storage key when no peer matches (does not throw)', async () => {
+  it('synthesizes a peer when a message arrives from a host mDNS has not discovered', async () => {
     render(<App />);
     await screen.findByText('TestMachine');
 
@@ -99,19 +99,56 @@ describe('App peer-keyed message routing', () => {
       peersUpdatedCb!([alice]);
     });
 
-    // Message from a sender we've never discovered — should not crash and
-    // should not be routed to alice. We assert only that the app stays alive.
+    // Message from a sender we've never discovered (e.g. Windows Firewall
+    // ate the inbound mDNS). A synthetic peer is synthesized from the
+    // sender's `from` + `remoteAddr` so the thread becomes selectable.
     act(() => {
       textReceivedCb!({
         id: 'msg-orphan',
         from: 'stranger.local',
         text: 'hi from nowhere',
         timestamp: Date.now(),
+        remoteAddr: '192.168.1.240',
       });
     });
 
-    // Select Alice — orphan message should NOT appear in her chat
-    fireEvent.click(await screen.findByText('alice.local'));
+    // The synthetic peer appears in the sidebar — click to open its thread
+    fireEvent.click(await screen.findByText('stranger.local'));
+    expect(await screen.findByText('hi from nowhere')).toBeInTheDocument();
+
+    // Alice's thread should still be empty — the orphan only lands in the
+    // synthetic peer's bucket, not leaking into other peers' threads.
+    fireEvent.click(screen.getByText('alice.local'));
     expect(screen.queryByText('hi from nowhere')).not.toBeInTheDocument();
+  });
+
+  it('preserves synthetic peers across mDNS updates that do not include them', async () => {
+    render(<App />);
+    await screen.findByText('TestMachine');
+
+    act(() => {
+      peersUpdatedCb!([alice]);
+    });
+
+    act(() => {
+      textReceivedCb!({
+        id: 'msg-orphan',
+        from: 'stranger.local',
+        text: 'hi',
+        timestamp: Date.now(),
+        remoteAddr: '192.168.1.240',
+      });
+    });
+
+    await screen.findByText('stranger.local');
+
+    // Another mDNS refresh — still only Alice discovered. The synthetic
+    // peer must survive the refresh; otherwise a routine peer update would
+    // wipe out every orphan thread.
+    act(() => {
+      peersUpdatedCb!([alice]);
+    });
+
+    expect(screen.getByText('stranger.local')).toBeInTheDocument();
   });
 });
