@@ -13,6 +13,8 @@ export interface Peer {
 
 type PeerCallback = (peers: Peer[]) => void;
 
+type PublishedService = ReturnType<Bonjour['publish']>;
+
 export class Discovery {
   private bonjour: Bonjour;
   private peers: Map<string, Peer> = new Map();
@@ -21,38 +23,81 @@ export class Discovery {
   private servicePort: number;
   private deviceName: string;
   private serviceType = 'liminn';
+  private instanceId: string;
+  private publishedService: PublishedService | null = null;
+  private sweepInterval: NodeJS.Timeout | null = null;
 
-  constructor(port: number, deviceName?: string) {
+  /**
+   * @param port        Local transfer-server port to advertise.
+   * @param machineId   Stable per-install identifier. Passed in (rather
+   *                    than generated here) so it can be persisted
+   *                    across restarts — which is what makes peer.id
+   *                    usable as a conversation key on the other side.
+   * @param deviceName  Initial display name (nickname). Falls back to
+   *                    `os.hostname()`; can be changed at runtime via
+   *                    `setDeviceName` without restarting discovery.
+   */
+  constructor(port: number, machineId: string, deviceName?: string) {
     this.bonjour = new Bonjour();
     this.servicePort = port;
     this.deviceName = deviceName || os.hostname();
-    this.instanceId = Discovery.generateInstanceId();
-  }
-
-  private instanceId: string;
-
-  private static generateInstanceId(): string {
-    const interfaces = os.networkInterfaces();
-    let mac = '';
-    for (const name of Object.keys(interfaces)) {
-      for (const iface of interfaces[name] || []) {
-        if (!iface.internal && iface.mac && iface.mac !== '00:00:00:00:00:00') {
-          mac = iface.mac;
-          break;
-        }
-      }
-      if (mac) break;
-    }
-    return `${mac || 'unknown'}-${process.pid}-${Date.now()}`;
+    this.instanceId = machineId;
   }
 
   getDeviceId(): string {
     return this.instanceId;
   }
 
+  getDeviceName(): string {
+    return this.deviceName;
+  }
+
+  /**
+   * Rename this device. The mDNS service is unpublished and
+   * republished with the new `name` so peers see the update without
+   * waiting for a stale-TTL refresh. The machineId stays fixed, so
+   * peers keep their existing conversation threads.
+   */
+  setDeviceName(nextName: string): void {
+    const trimmed = nextName.trim();
+    if (!trimmed) return;
+    if (trimmed === this.deviceName) return;
+    this.deviceName = trimmed;
+    this.republish();
+  }
+
+  /**
+   * Begin advertising and browsing. Safe to call once; subsequent
+   * renames go through `setDeviceName` → `republish()` and don't
+   * re-enter here (which would duplicate the browser and sweep timer).
+   */
   start(callback: PeerCallback): void {
     this.onPeersChanged = callback;
+    this.publish();
+    this.startBrowsing();
+  }
 
+  private republish(): void {
+    // No-op if start() hasn't been called yet — deviceName will flow
+    // through to the first publish naturally.
+    if (!this.publishedService) return;
+
+    const old = this.publishedService;
+    this.publishedService = null;
+    try {
+      // `stop` is typed optional on bonjour-service's Service, but in
+      // practice is always attached to a published instance. Guard just
+      // in case the library ever returns something without it — a
+      // missing stop would leak the old record, but that's still better
+      // than a crash during a user-initiated rename.
+      if (typeof old.stop === 'function') old.stop(() => undefined);
+    } catch (err) {
+      console.warn('[discovery] error stopping old service on republish:', err);
+    }
+    this.publish();
+  }
+
+  private publish(): void {
     const publishName = `${this.deviceName}-${this.getDeviceId().slice(-5)}`;
     console.log('[discovery] publishing:', {
       name: publishName,
@@ -72,9 +117,12 @@ export class Discovery {
         platform: process.platform,
       },
     });
+    this.publishedService = svc;
     svc.on('up', () => console.log('[discovery] publish up:', publishName));
     svc.on('error', (err: Error) => console.error('[discovery] publish error:', err));
+  }
 
+  private startBrowsing(): void {
     this.browser = this.bonjour.find({ type: this.serviceType });
     console.log('[discovery] browser started for type:', this.serviceType);
 
@@ -94,7 +142,7 @@ export class Discovery {
       this.removePeer(service);
     });
 
-    setInterval(() => {
+    this.sweepInterval = setInterval(() => {
       const now = Date.now();
       let changed = false;
 
@@ -177,6 +225,10 @@ export class Discovery {
   }
 
   stop(): void {
+    if (this.sweepInterval) {
+      clearInterval(this.sweepInterval);
+      this.sweepInterval = null;
+    }
     if (this.browser) {
       this.browser.stop();
     }

@@ -44,6 +44,31 @@ describe('TransferServer HTTP API', () => {
       });
       expect(received[0].id).toMatch(/^txt-/);
       expect(received[0].timestamp).toBeGreaterThan(0);
+      expect(received[0].fromId).toBeUndefined();
+    });
+
+    it('forwards fromId when the sender provides one', async () => {
+      const received: ReceivedText[] = [];
+      server.onText((item) => received.push(item));
+
+      await request(baseUrl)
+        .post('/api/text')
+        .send({ from: 'alice-host', fromId: 'alice-machine-uuid', text: 'tagged' })
+        .set('Content-Type', 'application/json');
+
+      expect(received[0].fromId).toBe('alice-machine-uuid');
+    });
+
+    it('treats an empty-string fromId as absent rather than a valid id', async () => {
+      const received: ReceivedText[] = [];
+      server.onText((item) => received.push(item));
+
+      await request(baseUrl)
+        .post('/api/text')
+        .send({ from: 'alice-host', fromId: '', text: 'empty id' })
+        .set('Content-Type', 'application/json');
+
+      expect(received[0].fromId).toBeUndefined();
     });
 
     it('rejects a request with no text body with 400', async () => {
@@ -105,6 +130,7 @@ describe('TransferServer HTTP API', () => {
       const res = await request(baseUrl)
         .post('/api/file')
         .field('from', 'alice-host')
+        .field('fromId', 'alice-machine-uuid')
         .attach('file', Buffer.from('file contents here'), uniqueName);
 
       expect(res.status).toBe(200);
@@ -113,6 +139,7 @@ describe('TransferServer HTTP API', () => {
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({
         from: 'alice-host',
+        fromId: 'alice-machine-uuid',
         filename: uniqueName,
         size: Buffer.from('file contents here').length,
       });

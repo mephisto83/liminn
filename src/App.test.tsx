@@ -1,41 +1,50 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, act, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import App from './App';
 import type { Peer, ReceivedText, LiminnAPI } from './types';
 
+// Peer names appear in both the sidebar (`.peer-name`) and the chat
+// header (`<h2>` in ChatArea) once a thread is open. Scope sidebar-
+// oriented assertions to the aside so "is this peer listed?" is clear.
+const sidebar = () => within(document.querySelector('aside.sidebar') as HTMLElement);
+
 /**
- * These tests lock in hostname-keyed message routing. Threads are stored by
- * hostname (peer.name / item.from) so they survive a peer restart — peer.id
- * is a per-launch instance identifier that changes whenever the other side
- * relaunches, and keying by id would split the conversation into a fresh
- * empty thread every time. Since peer.name and item.from are both the
- * device hostname, they converge on a single stable key.
+ * These tests lock in machineId-keyed message routing. Threads are
+ * stored by the sender's stable machineId (peer.id / item.fromId), not
+ * by hostname — machineId is now persisted in `<userData>/identity.json`
+ * so it survives restarts, while nicknames can change over time. Keying
+ * by hostname would split the thread when the sender renames themselves;
+ * keying by machineId holds the conversation together.
  */
 describe('App peer-keyed message routing', () => {
   let peersUpdatedCb: ((peers: Peer[]) => void) | null = null;
   let textReceivedCb: ((item: ReceivedText) => void) | null = null;
+  let setNickname: LiminnAPI['setNickname'];
 
   beforeEach(() => {
     peersUpdatedCb = null;
     textReceivedCb = null;
+    setNickname = vi.fn(async (_nickname: string) => ({ ok: true, nickname: 'Renamed' }));
 
     const liminn: LiminnAPI = {
-      getPeers: vi.fn().mockResolvedValue([]),
-      sendText: vi.fn().mockResolvedValue({ ok: true }),
-      sendFile: vi.fn().mockResolvedValue({ ok: false, error: 'Cancelled' }),
-      getDeviceName: vi.fn().mockResolvedValue('TestMachine'),
-      getReceivedItems: vi.fn().mockResolvedValue({ texts: [], files: [] }),
-      openFile: vi.fn().mockResolvedValue(undefined),
-      openReceivedFolder: vi.fn().mockResolvedValue(undefined),
+      getPeers: async () => [],
+      sendText: async () => ({ ok: true }),
+      sendFile: async () => ({ ok: false, error: 'Cancelled' }),
+      getDeviceName: async () => 'TestMachine',
+      getNickname: async () => 'TestMachine',
+      setNickname,
+      getReceivedItems: async () => ({ texts: [], files: [] }),
+      openFile: async () => undefined,
+      openReceivedFolder: async () => undefined,
       onPeersUpdated: (cb) => {
         peersUpdatedCb = cb;
       },
       onTextReceived: (cb) => {
         textReceivedCb = cb;
       },
-      onFileReceived: vi.fn(),
-      onSendProgress: vi.fn(),
+      onFileReceived: () => undefined,
+      onSendProgress: () => undefined,
     };
 
     window.liminn = liminn;
@@ -48,15 +57,15 @@ describe('App peer-keyed message routing', () => {
   });
 
   const alice: Peer = {
-    id: 'peer-alice-uuid',
-    name: 'alice.local',
+    id: 'alice-machine-uuid',
+    name: 'Alice-Studio',
     host: 'alice.local',
     port: 12345,
     addresses: ['192.168.1.2'],
     platform: 'darwin',
   };
 
-  it('routes a received text to the peer matched by name, even when peers arrive after the listeners are registered', async () => {
+  it('routes a received text to the peer matched by machineId, even when peers arrive after listeners are registered', async () => {
     render(<App />);
 
     // Wait until initial mount's async getDeviceName resolves so the device
@@ -72,26 +81,25 @@ describe('App peer-keyed message routing', () => {
       peersUpdatedCb!([alice]);
     });
 
-    // Alice shows in sidebar — click to select so the chat area renders her messages
-    const aliceEntry = await screen.findByText('alice.local');
+    // Click Alice's entry so her thread renders
+    const aliceEntry = await screen.findByText('Alice-Studio');
     fireEvent.click(aliceEntry);
 
-    // Now a text arrives from alice.local
+    // Message arrives carrying alice's machineId — the stable key
     act(() => {
       textReceivedCb!({
         id: 'msg-1',
-        from: 'alice.local',
+        from: 'Alice-Studio',
+        fromId: alice.id,
         text: 'hello from alice',
         timestamp: Date.now(),
       });
     });
 
-    // If the routing is correct, the message ends up at messages[alice.id],
-    // which is what the chat area reads when Alice is selected.
     expect(await screen.findByText('hello from alice')).toBeInTheDocument();
   });
 
-  it('synthesizes a peer when a message arrives from a host mDNS has not discovered', async () => {
+  it('keeps the thread unified when the sender renames themselves mid-conversation', async () => {
     render(<App />);
     await screen.findByText('TestMachine');
 
@@ -99,27 +107,145 @@ describe('App peer-keyed message routing', () => {
       peersUpdatedCb!([alice]);
     });
 
-    // Message from a sender we've never discovered (e.g. Windows Firewall
-    // ate the inbound mDNS). A synthetic peer is synthesized from the
-    // sender's `from` + `remoteAddr` so the thread becomes selectable.
+    fireEvent.click(await screen.findByText('Alice-Studio'));
+
+    act(() => {
+      textReceivedCb!({
+        id: 'msg-before-rename',
+        from: 'Alice-Studio',
+        fromId: alice.id,
+        text: 'before rename',
+        timestamp: Date.now(),
+      });
+    });
+
+    expect(await screen.findByText('before rename')).toBeInTheDocument();
+
+    // Alice republishes with a new nickname — same machineId
+    const renamedAlice: Peer = { ...alice, name: 'Alice-Laptop' };
+    act(() => {
+      peersUpdatedCb!([renamedAlice]);
+    });
+
+    // A second message arrives after the rename, carrying the same fromId
+    act(() => {
+      textReceivedCb!({
+        id: 'msg-after-rename',
+        from: 'Alice-Laptop',
+        fromId: alice.id,
+        text: 'after rename',
+        timestamp: Date.now(),
+      });
+    });
+
+    // Sidebar shows the new name, and the thread contains BOTH messages —
+    // proof the rename didn't fork the conversation.
+    await sidebar().findByText('Alice-Laptop');
+    expect(screen.getByText('before rename')).toBeInTheDocument();
+    expect(await screen.findByText('after rename')).toBeInTheDocument();
+  });
+
+  it('synthesizes a peer (keyed by fromId) when a message arrives from a machine mDNS has not discovered', async () => {
+    render(<App />);
+    await screen.findByText('TestMachine');
+
+    act(() => {
+      peersUpdatedCb!([alice]);
+    });
+
     act(() => {
       textReceivedCb!({
         id: 'msg-orphan',
-        from: 'stranger.local',
+        from: 'Stranger',
+        fromId: 'stranger-machine-uuid',
         text: 'hi from nowhere',
         timestamp: Date.now(),
         remoteAddr: '192.168.1.240',
       });
     });
 
-    // The synthetic peer appears in the sidebar — click to open its thread
-    fireEvent.click(await screen.findByText('stranger.local'));
+    fireEvent.click(await screen.findByText('Stranger'));
     expect(await screen.findByText('hi from nowhere')).toBeInTheDocument();
 
-    // Alice's thread should still be empty — the orphan only lands in the
-    // synthetic peer's bucket, not leaking into other peers' threads.
-    fireEvent.click(screen.getByText('alice.local'));
+    // Alice's thread stays empty — the orphan only lands in the stranger's
+    // bucket, not leaking into other peers.
+    fireEvent.click(screen.getByText('Alice-Studio'));
     expect(screen.queryByText('hi from nowhere')).not.toBeInTheDocument();
+  });
+
+  it('falls back to a synthetic-<name> key when the sender did not supply fromId (legacy peer)', async () => {
+    render(<App />);
+    await screen.findByText('TestMachine');
+
+    act(() => {
+      peersUpdatedCb!([alice]);
+    });
+
+    act(() => {
+      textReceivedCb!({
+        id: 'msg-legacy',
+        from: 'Legacy-Host',
+        text: 'from an old build',
+        timestamp: Date.now(),
+        remoteAddr: '192.168.1.241',
+      });
+    });
+
+    fireEvent.click(await screen.findByText('Legacy-Host'));
+    expect(await screen.findByText('from an old build')).toBeInTheDocument();
+  });
+
+  it('migrates a synthetic-<name> thread onto the real machineId once mDNS discovers that host', async () => {
+    render(<App />);
+    await screen.findByText('TestMachine');
+
+    // Legacy-style orphan arrives before mDNS sees the host
+    act(() => {
+      textReceivedCb!({
+        id: 'msg-legacy',
+        from: 'Bob-Desktop',
+        text: 'before discovery',
+        timestamp: Date.now(),
+        remoteAddr: '192.168.1.50',
+      });
+    });
+
+    // Select the synthetic Bob
+    fireEvent.click(await screen.findByText('Bob-Desktop'));
+    expect(await screen.findByText('before discovery')).toBeInTheDocument();
+
+    // mDNS now catches up — the real Bob shows up with a stable machineId
+    const bob: Peer = {
+      id: 'bob-machine-uuid',
+      name: 'Bob-Desktop',
+      host: 'bob.local',
+      port: 23456,
+      addresses: ['192.168.1.50'],
+      platform: 'win32',
+    };
+    act(() => {
+      peersUpdatedCb!([bob]);
+    });
+
+    // A new message arrives, this time with fromId set — it must land in
+    // the same thread as the pre-discovery message (migrated to bob.id).
+    act(() => {
+      textReceivedCb!({
+        id: 'msg-after-discovery',
+        from: 'Bob-Desktop',
+        fromId: bob.id,
+        text: 'after discovery',
+        timestamp: Date.now(),
+      });
+    });
+
+    // Only one Bob in the sidebar — the synthetic got replaced, not
+    // duplicated — and both messages live under the real peer.
+    await waitFor(() => {
+      expect(sidebar().getAllByText('Bob-Desktop')).toHaveLength(1);
+    });
+    expect(screen.getByText('before discovery')).toBeInTheDocument();
+    expect(await screen.findByText('after discovery')).toBeInTheDocument();
   });
 
   it('preserves synthetic peers across mDNS updates that do not include them', async () => {
@@ -133,22 +259,38 @@ describe('App peer-keyed message routing', () => {
     act(() => {
       textReceivedCb!({
         id: 'msg-orphan',
-        from: 'stranger.local',
+        from: 'Stranger',
+        fromId: 'stranger-machine-uuid',
         text: 'hi',
         timestamp: Date.now(),
         remoteAddr: '192.168.1.240',
       });
     });
 
-    await screen.findByText('stranger.local');
+    await screen.findByText('Stranger');
 
     // Another mDNS refresh — still only Alice discovered. The synthetic
-    // peer must survive the refresh; otherwise a routine peer update would
-    // wipe out every orphan thread.
+    // must survive or routine peer refreshes would wipe out orphan threads.
     act(() => {
       peersUpdatedCb!([alice]);
     });
 
-    expect(screen.getByText('stranger.local')).toBeInTheDocument();
+    expect(screen.getByText('Stranger')).toBeInTheDocument();
+  });
+
+  it('sends the nickname change through the IPC bridge when the sidebar label is edited', async () => {
+    render(<App />);
+    await screen.findByText('TestMachine');
+
+    fireEvent.click(screen.getByText('TestMachine'));
+
+    const input = await screen.findByLabelText('Device nickname');
+    fireEvent.change(input, { target: { value: 'Renamed' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(setNickname).toHaveBeenCalledWith('Renamed');
+    });
+    expect(await screen.findByText('Renamed')).toBeInTheDocument();
   });
 });

@@ -24,10 +24,15 @@ interface ToastData {
 export default function App() {
   const [peers, setPeers] = useState<Peer[]>([]);
   const [selectedPeer, setSelectedPeer] = useState<Peer | null>(null);
-  // Keyed by hostname (peer.name / item.from), NOT peer.id — peer.id is a
-  // per-launch instance identifier that changes whenever the other side
-  // restarts, which would split the conversation into a new empty thread
-  // every time. Hostname is stable across restarts.
+  // Keyed by peer.id (machineId), which is now persistent across restarts —
+  // the identity file in userData keeps it stable. Renames on the other
+  // side don't split the thread because the id stays fixed while only the
+  // advertised nickname changes.
+  //
+  // Synthetic peers (messages from hosts mDNS hasn't discovered) are keyed
+  // by `item.fromId` when the sender supplied one, otherwise a
+  // `synthetic-<hostname>` fallback. The fallback is migrated to the real
+  // machineId the first time mDNS catches up with that host.
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [deviceName, setDeviceName] = useState('This Device');
   const [toasts, setToasts] = useState<ToastData[]>([]);
@@ -39,38 +44,47 @@ export default function App() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
   }, []);
 
-  const addMessage = useCallback((hostname: string, msg: Message) => {
+  const addMessage = useCallback((peerKey: string, msg: Message) => {
     setMessages((prev) => ({
       ...prev,
-      [hostname]: [...(prev[hostname] || []), msg],
+      [peerKey]: [...(prev[peerKey] || []), msg],
     }));
   }, []);
 
   /**
-   * Ensure there's a Peer entry for `from`. If mDNS has already discovered
-   * this host, leave peers untouched. Otherwise synthesize a read-only
-   * placeholder so the thread becomes selectable — without this, messages
-   * from hosts that haven't been discovered (Windows Firewall eating
-   * inbound mDNS, Bonjour not advertising, cross-VLAN, etc.) get stored in
-   * `messages[from]` but have nowhere in the UI to appear.
+   * Ensure there's a Peer entry for the incoming message. If the
+   * sender's machineId is already in the peer list, nothing to do.
+   * Otherwise synthesize a read-only placeholder so the thread becomes
+   * selectable — without this, messages from hosts that mDNS hasn't
+   * discovered (firewall, cross-VLAN, legacy peer not advertising yet)
+   * get stored in `messages[...]` but have nowhere in the UI to appear.
    *
    * Synthetic peers are tagged `platform: 'synthetic'` so the mDNS merge
    * below can tell them apart from real peers.
    */
-  const ensurePeer = useCallback((from: string, remoteAddr: string | undefined) => {
-    setPeers((prev) => {
-      if (prev.some((p) => p.name === from)) return prev;
-      const synthetic: Peer = {
-        id: `synthetic-${from}`,
-        name: from,
-        host: from,
-        port: 0,
-        addresses: remoteAddr ? [remoteAddr] : [],
-        platform: 'synthetic',
-      };
-      return [...prev, synthetic];
-    });
-  }, []);
+  const ensurePeer = useCallback(
+    (peerKey: string, from: string, remoteAddr: string | undefined) => {
+      setPeers((prev) => {
+        if (prev.some((p) => p.id === peerKey)) return prev;
+        // If the peerKey is a synthetic fallback and we already have a
+        // peer (real or synthetic) with the same display name, don't
+        // create a second entry — that peer's thread is the right home.
+        if (peerKey.startsWith('synthetic-') && prev.some((p) => p.name === from)) {
+          return prev;
+        }
+        const synthetic: Peer = {
+          id: peerKey,
+          name: from,
+          host: from,
+          port: 0,
+          addresses: remoteAddr ? [remoteAddr] : [],
+          platform: 'synthetic',
+        };
+        return [...prev, synthetic];
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.liminn) return;
@@ -79,30 +93,64 @@ export default function App() {
     window.liminn.getPeers().then(setPeers);
 
     // mDNS peer updates replace the discovered set, but we merge any
-    // synthetic peers (from orphan messages) whose name isn't in the
-    // incoming list — otherwise a periodic peer refresh would wipe out
-    // the placeholder we created for an unreached sender.
+    // synthetic peers (from orphan messages) whose id AND name aren't in
+    // the incoming list — otherwise a periodic peer refresh would wipe
+    // out the placeholder we created for an unreached sender.
+    //
+    // When an mDNS peer's name matches a `synthetic-<name>` placeholder,
+    // we migrate `messages[synthetic-<name>]` → `messages[realId]` so the
+    // thread continues under the stable key instead of leaving a dangling
+    // bucket.
     window.liminn.onPeersUpdated((mdnsPeers) => {
       setPeers((prev) => {
+        const mdnsIds = new Set(mdnsPeers.map((p) => p.id));
         const mdnsNames = new Set(mdnsPeers.map((p) => p.name));
         const syntheticsToKeep = prev.filter(
-          (p) => p.platform === 'synthetic' && !mdnsNames.has(p.name)
+          (p) =>
+            p.platform === 'synthetic' &&
+            !mdnsIds.has(p.id) &&
+            !mdnsNames.has(p.name)
         );
         return [...mdnsPeers, ...syntheticsToKeep];
       });
-      // If mDNS has now discovered a host we had as a synthetic, promote
-      // the selection to the real peer so sending works without the user
-      // having to reselect.
+
+      setMessages((prev) => {
+        let next = prev;
+        let mutated = false;
+        for (const real of mdnsPeers) {
+          const synthKey = `synthetic-${real.name}`;
+          if (prev[synthKey] && !prev[real.id]) {
+            if (!mutated) {
+              next = { ...prev };
+              mutated = true;
+            }
+            next[real.id] = next[synthKey];
+            delete next[synthKey];
+          }
+        }
+        return mutated ? next : prev;
+      });
+
+      // If the currently selected peer was a synthetic that mDNS has now
+      // resolved — either by id (sender sent fromId) or by name (legacy
+      // sender) — swap the selection to the real peer so sending works
+      // without the user having to reselect.
       setSelectedPeer((prev) => {
         if (!prev) return prev;
-        const match = mdnsPeers.find((p) => p.name === prev.name);
-        return match ?? prev;
+        const byId = mdnsPeers.find((p) => p.id === prev.id);
+        if (byId) return byId;
+        if (prev.platform === 'synthetic') {
+          const byName = mdnsPeers.find((p) => p.name === prev.name);
+          if (byName) return byName;
+        }
+        return prev;
       });
     });
 
     window.liminn.onTextReceived((item: ReceivedText) => {
-      ensurePeer(item.from, item.remoteAddr);
-      addMessage(item.from, {
+      const peerKey = item.fromId || `synthetic-${item.from}`;
+      ensurePeer(peerKey, item.from, item.remoteAddr);
+      addMessage(peerKey, {
         id: item.id,
         type: 'text-received',
         from: item.from,
@@ -113,8 +161,9 @@ export default function App() {
     });
 
     window.liminn.onFileReceived((item: ReceivedFile) => {
-      ensurePeer(item.from, item.remoteAddr);
-      addMessage(item.from, {
+      const peerKey = item.fromId || `synthetic-${item.from}`;
+      ensurePeer(peerKey, item.from, item.remoteAddr);
+      addMessage(peerKey, {
         id: item.id,
         type: 'file-received',
         from: item.from,
@@ -142,11 +191,25 @@ export default function App() {
     });
   }, [addMessage, addToast, ensurePeer]);
 
+  const handleSetNickname = useCallback(
+    async (nextName: string): Promise<boolean> => {
+      if (!window.liminn) return false;
+      const result = await window.liminn.setNickname(nextName);
+      if (result.ok && result.nickname) {
+        setDeviceName(result.nickname);
+        return true;
+      }
+      addToast(result.error || 'Failed to save nickname', 'error');
+      return false;
+    },
+    [addToast]
+  );
+
   const handleSendText = async (text: string) => {
     if (!selectedPeer || !window.liminn) return;
     const result = await window.liminn.sendText(selectedPeer.id, text);
     if (result.ok) {
-      addMessage(selectedPeer.name, {
+      addMessage(selectedPeer.id, {
         id: `sent-${Date.now()}`,
         type: 'text-sent',
         from: deviceName,
@@ -162,7 +225,7 @@ export default function App() {
     if (!selectedPeer || !window.liminn) return;
     const result = await window.liminn.sendFile(selectedPeer.id);
     if (result.ok && result.filename) {
-      addMessage(selectedPeer.name, {
+      addMessage(selectedPeer.id, {
         id: `sent-${Date.now()}`,
         type: 'file-sent',
         from: deviceName,
@@ -175,7 +238,7 @@ export default function App() {
     }
   };
 
-  const peerMessages = selectedPeer ? messages[selectedPeer.name] || [] : [];
+  const peerMessages = selectedPeer ? messages[selectedPeer.id] || [] : [];
 
   return (
     <div className="app">
@@ -184,6 +247,7 @@ export default function App() {
         selectedPeer={selectedPeer}
         onSelectPeer={setSelectedPeer}
         deviceName={deviceName}
+        onRenameDevice={handleSetNickname}
         sendProgress={sendProgress}
       />
       <main className="main-area">
