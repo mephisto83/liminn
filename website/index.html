@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Liminn — Share across your network</title>
+  <meta name="description" content="Send text and files instantly to any device on your local network. No accounts, no cloud, no setup." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #07050e;
+      --surface: rgba(255,255,255,0.03);
+      --surface-hover: rgba(255,255,255,0.06);
+      --border: rgba(255,255,255,0.06);
+      --text: #f1f0f5;
+      --text-secondary: #9690ab;
+      --text-muted: #5f5a73;
+      --accent: #818cf8;
+      --accent-bright: #a78bfa;
+      --gradient: linear-gradient(135deg, #818cf8, #c084fc);
+      --glow: rgba(129, 140, 248, 0.15);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ===== Ambient Background ===== */
+    .bg-glow {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      overflow: hidden;
+    }
+    .bg-glow .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.4;
+    }
+    .bg-glow .orb-1 {
+      width: 600px; height: 600px;
+      background: #818cf8;
+      top: -200px; left: -100px;
+      animation: drift 20s ease-in-out infinite;
+    }
+    .bg-glow .orb-2 {
+      width: 500px; height: 500px;
+      background: #c084fc;
+      bottom: -150px; right: -100px;
+      animation: drift 25s ease-in-out infinite reverse;
+    }
+    .bg-glow .orb-3 {
+      width: 300px; height: 300px;
+      background: #6366f1;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      animation: pulse-glow 8s ease-in-out infinite;
+    }
+    @keyframes drift {
+      0%, 100% { transform: translate(0, 0); }
+      50% { transform: translate(40px, -30px); }
+    }
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 0.2; transform: translate(-50%, -50%) scale(1); }
+      50% { opacity: 0.35; transform: translate(-50%, -50%) scale(1.2); }
+    }
+
+    /* ===== Layout ===== */
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+    section, footer, nav { position: relative; z-index: 1; }
+
+    /* ===== Nav ===== */
+    nav {
+      padding: 20px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      color: var(--text);
+    }
+    .nav-logo {
+      width: 36px; height: 36px;
+      border-radius: 10px;
+      background: var(--gradient);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 12px rgba(129,140,248,0.3);
+    }
+    .nav-logo svg { filter: brightness(2); }
+    .nav-title { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+    .nav-version {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      margin-left: 8px;
+    }
+    .nav-links { display: flex; align-items: center; gap: 24px; }
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-github {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text) !important;
+      transition: all 0.2s;
+    }
+    .nav-github:hover { background: var(--surface-hover); }
+
+    /* ===== Hero ===== */
+    .hero {
+      text-align: center;
+      padding: 100px 0 80px;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      border-radius: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 32px;
+    }
+    .hero-badge .pulse {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #34d399;
+      box-shadow: 0 0 8px rgba(52,211,153,0.5);
+      animation: pulse-dot 2s infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.5; }
+    }
+    .hero h1 {
+      font-size: clamp(40px, 6vw, 72px);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1.1;
+      margin-bottom: 24px;
+    }
+    .hero h1 .gradient {
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p {
+      font-size: 18px;
+      color: var(--text-secondary);
+      max-width: 520px;
+      margin: 0 auto 48px;
+      line-height: 1.7;
+    }
+
+    /* ===== Download Buttons ===== */
+    .download-group {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+    .dl-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 32px;
+      border-radius: 14px;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 600;
+      transition: all 0.25s cubic-bezier(0.4,0,0.2,1);
+      cursor: pointer;
+      border: none;
+      font-family: inherit;
+    }
+    .dl-btn-primary {
+      background: var(--gradient);
+      color: white;
+      box-shadow: 0 4px 24px rgba(129,140,248,0.3);
+    }
+    .dl-btn-primary:hover {
+      box-shadow: 0 8px 40px rgba(129,140,248,0.45);
+      transform: translateY(-2px);
+    }
+    .dl-btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .dl-btn-secondary:hover {
+      background: var(--surface-hover);
+      border-color: rgba(129,140,248,0.3);
+      transform: translateY(-2px);
+    }
+    .dl-btn svg { flex-shrink: 0; }
+    .dl-label { text-align: left; }
+    .dl-label small { display: block; font-size: 11px; font-weight: 400; color: var(--text-muted); margin-top: 2px; }
+
+    .version-info {
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .version-info strong { color: var(--accent); font-weight: 600; }
+
+    /* ===== Screenshot ===== */
+    .screenshot-section {
+      padding: 40px 0 80px;
+      text-align: center;
+    }
+    .screenshot-frame {
+      max-width: 900px;
+      margin: 0 auto;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.03);
+    }
+    .screenshot-frame .titlebar {
+      height: 40px;
+      background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 8px;
+    }
+    .titlebar .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .titlebar .dot-r { background: #ff5f57; }
+    .titlebar .dot-y { background: #febc2e; }
+    .titlebar .dot-g { background: #28c840; }
+    .screenshot-content {
+      aspect-ratio: 16/10;
+      background: linear-gradient(135deg, #0f0a1e 0%, #161029 50%, #1a1030 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+    .mock-sidebar {
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 240px;
+      background: rgba(255,255,255,0.02);
+      border-right: 1px solid var(--border);
+      padding: 24px 16px;
+    }
+    .mock-header {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 24px;
+    }
+    .mock-logo {
+      width: 28px; height: 28px; border-radius: 6px;
+      background: var(--gradient); opacity: 0.8;
+    }
+    .mock-text { height: 10px; border-radius: 4px; background: rgba(255,255,255,0.1); }
+    .mock-text.w60 { width: 60%; }
+    .mock-text.w80 { width: 80%; }
+    .mock-text.w40 { width: 40%; }
+    .mock-peer {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 8px; border-radius: 8px; margin-bottom: 4px;
+    }
+    .mock-peer.active { background: rgba(129,140,248,0.12); }
+    .mock-avatar {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: rgba(255,255,255,0.05);
+    }
+    .mock-peer-lines { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+    .mock-chat {
+      position: absolute;
+      left: 240px; top: 0; right: 0; bottom: 0;
+      display: flex; flex-direction: column;
+    }
+    .mock-chat-header {
+      height: 56px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 24px;
+    }
+    .mock-messages { flex: 1; padding: 24px; display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; }
+    .mock-msg {
+      max-width: 50%; padding: 10px 16px; border-radius: 14px; font-size: 12px;
+    }
+    .mock-msg.sent {
+      align-self: flex-end;
+      background: var(--gradient);
+      color: white;
+      border-bottom-right-radius: 4px;
+    }
+    .mock-msg.recv {
+      align-self: flex-start;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-bottom-left-radius: 4px;
+    }
+    .mock-input-bar {
+      height: 64px; border-top: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 24px; gap: 12px;
+    }
+    .mock-input {
+      flex: 1; height: 36px; border-radius: 8px;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+    }
+    .mock-send-btn {
+      width: 36px; height: 36px; border-radius: 8px;
+      background: var(--gradient); opacity: 0.8;
+    }
+
+    /* ===== Features ===== */
+    .features {
+      padding: 80px 0;
+    }
+    .features-header {
+      text-align: center;
+      margin-bottom: 64px;
+    }
+    .features-header h2 {
+      font-size: 36px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 12px;
+    }
+    .features-header p {
+      color: var(--text-secondary);
+      font-size: 16px;
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 24px;
+      transition: all 0.3s;
+    }
+    .feature-card:hover {
+      background: var(--surface-hover);
+      border-color: rgba(129,140,248,0.15);
+      transform: translateY(-4px);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+    }
+    .feature-icon {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      background: rgba(129,140,248,0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      color: var(--accent);
+    }
+    .feature-card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    /* ===== How It Works ===== */
+    .how-it-works {
+      padding: 80px 0;
+    }
+    .how-header {
+      text-align: center;
+      margin-bottom: 64px;
+    }
+    .how-header h2 {
+      font-size: 36px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 12px;
+    }
+    .how-header p { color: var(--text-secondary); font-size: 16px; }
+    .steps {
+      display: flex;
+      justify-content: center;
+      gap: 40px;
+    }
+    .step {
+      text-align: center;
+      max-width: 240px;
+    }
+    .step-num {
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      background: var(--gradient);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 700;
+      margin: 0 auto 16px;
+      box-shadow: 0 4px 16px rgba(129,140,248,0.3);
+    }
+    .step h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+    .step p { font-size: 14px; color: var(--text-secondary); }
+
+    /* ===== Footer ===== */
+    footer {
+      padding: 40px 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+    footer p { font-size: 13px; color: var(--text-muted); }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 768px) {
+      .features-grid { grid-template-columns: 1fr; }
+      .steps { flex-direction: column; align-items: center; }
+      .download-group { flex-direction: column; align-items: center; }
+      .nav-links a:not(.nav-github) { display: none; }
+      .mock-sidebar { width: 180px; }
+      .mock-chat { left: 180px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-glow">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <div class="container">
+    <nav>
+      <a href="/" class="nav-brand">
+        <div class="nav-logo">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="white"/>
+            <path d="M2 17L12 22L22 17" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M2 12L12 17L22 12" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <span class="nav-title">Liminn</span>
+        <span class="nav-version" id="nav-version">v1.0.0</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="https://github.com/mephisto83/liminn" class="nav-github" target="_blank">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+          GitHub
+        </a>
+      </div>
+    </nav>
+  </div>
+
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">
+        <span class="pulse"></span>
+        Open source &middot; No cloud &middot; No accounts
+      </div>
+      <h1>
+        Share anything.<br />
+        <span class="gradient">Across your network.</span>
+      </h1>
+      <p>
+        Send text and files instantly to any device on your local network.
+        Zero configuration. Devices discover each other automatically.
+      </p>
+
+      <div class="download-group">
+        <a class="dl-btn dl-btn-primary" id="dl-mac" href="#" onclick="return false;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+          <span class="dl-label">Download for Mac<small>macOS 10.15+</small></span>
+        </a>
+        <a class="dl-btn dl-btn-secondary" id="dl-win" href="#" onclick="return false;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+          <span class="dl-label">Download for Windows<small>Windows 10+</small></span>
+        </a>
+      </div>
+      <p class="version-info">
+        Latest: <strong id="current-version">v1.0.0</strong>
+        &middot; <span id="release-date">April 2026</span>
+        &middot; <a href="https://github.com/mephisto83/liminn/releases" target="_blank" style="color: var(--accent); text-decoration: none;">Changelog</a>
+      </p>
+    </div>
+  </section>
+
+  <section class="screenshot-section">
+    <div class="container">
+      <div class="screenshot-frame">
+        <div class="titlebar">
+          <div class="dot dot-r"></div>
+          <div class="dot dot-y"></div>
+          <div class="dot dot-g"></div>
+        </div>
+        <div class="screenshot-content">
+          <div class="mock-sidebar">
+            <div class="mock-header">
+              <div class="mock-logo"></div>
+              <div style="flex:1; display:flex; flex-direction:column; gap:5px;">
+                <div class="mock-text w60"></div>
+                <div class="mock-text w40" style="height:6px; opacity:0.5;"></div>
+              </div>
+            </div>
+            <div style="margin-bottom:12px;">
+              <div class="mock-text w40" style="height:6px; opacity:0.4; margin-bottom:12px;"></div>
+            </div>
+            <div class="mock-peer active">
+              <div class="mock-avatar"></div>
+              <div class="mock-peer-lines">
+                <div class="mock-text w80"></div>
+                <div class="mock-text w40" style="height:6px; opacity:0.5;"></div>
+              </div>
+            </div>
+            <div class="mock-peer">
+              <div class="mock-avatar"></div>
+              <div class="mock-peer-lines">
+                <div class="mock-text w60"></div>
+                <div class="mock-text w40" style="height:6px; opacity:0.5;"></div>
+              </div>
+            </div>
+            <div class="mock-peer">
+              <div class="mock-avatar"></div>
+              <div class="mock-peer-lines">
+                <div class="mock-text w80"></div>
+                <div class="mock-text w40" style="height:6px; opacity:0.5;"></div>
+              </div>
+            </div>
+          </div>
+          <div class="mock-chat">
+            <div class="mock-chat-header">
+              <div style="display:flex; flex-direction:column; gap:5px;">
+                <div class="mock-text w60" style="width:120px;"></div>
+                <div class="mock-text w40" style="width:80px; height:6px; opacity:0.5;"></div>
+              </div>
+            </div>
+            <div class="mock-messages">
+              <div class="mock-msg recv">Hey, can you send me that file?</div>
+              <div class="mock-msg sent">Sure, sending it now!</div>
+              <div class="mock-msg sent" style="background: rgba(129,140,248,0.15); border: 1px solid rgba(129,140,248,0.2); display:flex; align-items:center; gap:8px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                design-v3.fig
+              </div>
+              <div class="mock-msg recv">Got it, thanks!</div>
+            </div>
+            <div class="mock-input-bar">
+              <div class="mock-input"></div>
+              <div class="mock-send-btn"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="features" id="features">
+    <div class="container">
+      <div class="features-header">
+        <h2>Everything you need</h2>
+        <p>Simple, fast, and secure local file sharing</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          </div>
+          <h3>Auto Discovery</h3>
+          <p>Devices find each other automatically using mDNS. No IP addresses, no configuration needed.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+          </div>
+          <h3>Any File Type</h3>
+          <p>Send documents, images, videos, archives — anything. No file size limits on your local network.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          <h3>Instant Messaging</h3>
+          <p>Send quick text messages between devices. Perfect for sharing links, code snippets, and notes.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <h3>Private & Secure</h3>
+          <p>Files never leave your local network. No cloud, no accounts, no data collection. Ever.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </div>
+          <h3>Cross Platform</h3>
+          <p>Works on macOS, Windows, and Linux. Share files between any combination of devices.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
+          <h3>Blazing Fast</h3>
+          <p>Direct peer-to-peer transfers at full LAN speed. No internet bottleneck, no upload limits.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="how-it-works" id="how-it-works">
+    <div class="container">
+      <div class="how-header">
+        <h2>How it works</h2>
+        <p>Three steps. That's it.</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <h3>Install & Launch</h3>
+          <p>Download Liminn and open it. It starts scanning your network immediately.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <h3>Select a Device</h3>
+          <p>Other devices running Liminn appear automatically in the sidebar.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <h3>Send Anything</h3>
+          <p>Type a message or attach a file. It arrives on the other device instantly.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p>
+        Liminn is <a href="https://github.com/mephisto83/liminn" target="_blank">open source</a>.
+        Built with Electron, React, and TypeScript.
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    // Fetch latest release version from GitHub
+    async function fetchLatestRelease() {
+      try {
+        const res = await fetch('https://api.github.com/repos/mephisto83/liminn/releases/latest');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const version = data.tag_name;
+        const date = new Date(data.published_at).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+        document.getElementById('nav-version').textContent = version;
+        document.getElementById('current-version').textContent = version;
+        document.getElementById('release-date').textContent = date;
+
+        // Find download URLs
+        for (const asset of data.assets || []) {
+          const name = asset.name.toLowerCase();
+          if (name.endsWith('.dmg')) {
+            document.getElementById('dl-mac').href = asset.browser_download_url;
+            document.getElementById('dl-mac').onclick = null;
+          }
+          if (name.endsWith('.exe')) {
+            document.getElementById('dl-win').href = asset.browser_download_url;
+            document.getElementById('dl-win').onclick = null;
+          }
+        }
+      } catch (e) {
+        // Fallback: link to releases page
+        document.getElementById('dl-mac').href = 'https://github.com/mephisto83/liminn/releases/latest';
+        document.getElementById('dl-mac').onclick = null;
+        document.getElementById('dl-win').href = 'https://github.com/mephisto83/liminn/releases/latest';
+        document.getElementById('dl-win').onclick = null;
+      }
+    }
+
+    fetchLatestRelease();
+
+    // Fallback: point to releases page if no release found
+    document.getElementById('dl-mac').addEventListener('click', function(e) {
+      if (this.getAttribute('href') === '#') {
+        window.open('https://github.com/mephisto83/liminn/releases', '_blank');
+      }
+    });
+    document.getElementById('dl-win').addEventListener('click', function(e) {
+      if (this.getAttribute('href') === '#') {
+        window.open('https://github.com/mephisto83/liminn/releases', '_blank');
+      }
+    });
+  </script>
+</body>
+</html>
