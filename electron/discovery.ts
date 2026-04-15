@@ -53,8 +53,17 @@ export class Discovery {
   start(callback: PeerCallback): void {
     this.onPeersChanged = callback;
 
-    this.bonjour.publish({
-      name: `${this.deviceName}-${this.getDeviceId().slice(-5)}`,
+    const publishName = `${this.deviceName}-${this.getDeviceId().slice(-5)}`;
+    console.log('[discovery] publishing:', {
+      name: publishName,
+      type: this.serviceType,
+      port: this.servicePort,
+      id: this.getDeviceId(),
+      platform: process.platform,
+    });
+
+    const svc = this.bonjour.publish({
+      name: publishName,
       type: this.serviceType,
       port: this.servicePort,
       txt: {
@@ -63,14 +72,25 @@ export class Discovery {
         platform: process.platform,
       },
     });
+    svc.on('up', () => console.log('[discovery] publish up:', publishName));
+    svc.on('error', (err: Error) => console.error('[discovery] publish error:', err));
 
     this.browser = this.bonjour.find({ type: this.serviceType });
+    console.log('[discovery] browser started for type:', this.serviceType);
 
     this.browser.on('up', (service: Service) => {
+      console.log('[discovery] raw up event:', {
+        name: service.name,
+        host: service.host,
+        port: service.port,
+        addresses: service.addresses,
+        txt: service.txt,
+      });
       this.addPeer(service);
     });
 
     this.browser.on('down', (service: Service) => {
+      console.log('[discovery] raw down event:', service.name);
       this.removePeer(service);
     });
 
@@ -90,13 +110,25 @@ export class Discovery {
   private addPeer(service: Service): void {
     const txt = service.txt as Record<string, string>;
     const peerId = txt?.id;
-    if (!peerId || peerId === this.getDeviceId()) return;
+    if (!peerId) {
+      console.log('[discovery] dropped: no txt.id on service', service.name);
+      return;
+    }
+    if (peerId === this.getDeviceId()) {
+      console.log('[discovery] dropped: self', service.name);
+      return;
+    }
 
     const addresses = (service.addresses || []).filter(
       (addr: string) => !addr.includes(':')
     );
 
-    if (addresses.length === 0) return;
+    if (addresses.length === 0) {
+      console.log('[discovery] dropped: no IPv4 addresses for', service.name, 'got:', service.addresses);
+      return;
+    }
+
+    console.log('[discovery] added peer:', txt?.name || service.name, 'at', addresses.join(','));
 
     this.peers.set(peerId, {
       id: peerId,
