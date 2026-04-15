@@ -97,6 +97,19 @@ export class Discovery {
     setInterval(() => {
       const now = Date.now();
       let changed = false;
+
+      // bonjour-service doesn't refire 'up' for records it already knows about,
+      // so lastSeen would otherwise freeze at first-discovery time and the sweep
+      // below would evict live peers. Refresh from browser.services — bonjour's
+      // authoritative live cache — before applying the staleness threshold.
+      const services = (this.browser?.services ?? []) as Service[];
+      for (const service of services) {
+        const id = (service.txt as Record<string, string> | undefined)?.id;
+        if (!id) continue;
+        const peer = this.peers.get(id);
+        if (peer) peer.lastSeen = now;
+      }
+
       for (const [id, peer] of this.peers) {
         if (now - peer.lastSeen > 30000) {
           console.log(`[discovery] evicted stale peer: ${peer.name} (id=${id}, last seen ${Math.round((now - peer.lastSeen) / 1000)}s ago)`);
