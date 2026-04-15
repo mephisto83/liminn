@@ -46,15 +46,62 @@ export default function App() {
     }));
   }, []);
 
+  /**
+   * Ensure there's a Peer entry for `from`. If mDNS has already discovered
+   * this host, leave peers untouched. Otherwise synthesize a read-only
+   * placeholder so the thread becomes selectable — without this, messages
+   * from hosts that haven't been discovered (Windows Firewall eating
+   * inbound mDNS, Bonjour not advertising, cross-VLAN, etc.) get stored in
+   * `messages[from]` but have nowhere in the UI to appear.
+   *
+   * Synthetic peers are tagged `platform: 'synthetic'` so the mDNS merge
+   * below can tell them apart from real peers.
+   */
+  const ensurePeer = useCallback((from: string, remoteAddr: string | undefined) => {
+    setPeers((prev) => {
+      if (prev.some((p) => p.name === from)) return prev;
+      const synthetic: Peer = {
+        id: `synthetic-${from}`,
+        name: from,
+        host: from,
+        port: 0,
+        addresses: remoteAddr ? [remoteAddr] : [],
+        platform: 'synthetic',
+      };
+      return [...prev, synthetic];
+    });
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined' || !window.liminn) return;
 
     window.liminn.getDeviceName().then(setDeviceName);
     window.liminn.getPeers().then(setPeers);
 
-    window.liminn.onPeersUpdated(setPeers);
+    // mDNS peer updates replace the discovered set, but we merge any
+    // synthetic peers (from orphan messages) whose name isn't in the
+    // incoming list — otherwise a periodic peer refresh would wipe out
+    // the placeholder we created for an unreached sender.
+    window.liminn.onPeersUpdated((mdnsPeers) => {
+      setPeers((prev) => {
+        const mdnsNames = new Set(mdnsPeers.map((p) => p.name));
+        const syntheticsToKeep = prev.filter(
+          (p) => p.platform === 'synthetic' && !mdnsNames.has(p.name)
+        );
+        return [...mdnsPeers, ...syntheticsToKeep];
+      });
+      // If mDNS has now discovered a host we had as a synthetic, promote
+      // the selection to the real peer so sending works without the user
+      // having to reselect.
+      setSelectedPeer((prev) => {
+        if (!prev) return prev;
+        const match = mdnsPeers.find((p) => p.name === prev.name);
+        return match ?? prev;
+      });
+    });
 
     window.liminn.onTextReceived((item: ReceivedText) => {
+      ensurePeer(item.from, item.remoteAddr);
       addMessage(item.from, {
         id: item.id,
         type: 'text-received',
@@ -66,6 +113,7 @@ export default function App() {
     });
 
     window.liminn.onFileReceived((item: ReceivedFile) => {
+      ensurePeer(item.from, item.remoteAddr);
       addMessage(item.from, {
         id: item.id,
         type: 'file-received',
@@ -92,7 +140,7 @@ export default function App() {
         }, 1000);
       }
     });
-  }, [addMessage, addToast]);
+  }, [addMessage, addToast, ensurePeer]);
 
   const handleSendText = async (text: string) => {
     if (!selectedPeer || !window.liminn) return;

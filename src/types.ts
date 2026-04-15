@@ -12,6 +12,11 @@ export interface ReceivedText {
   from: string;
   text: string;
   timestamp: number;
+  /**
+   * Socket-observed IP of the sender. Used to synthesize a peer entry
+   * when a message arrives from a host mDNS hasn't yet discovered.
+   */
+  remoteAddr?: string;
 }
 
 export interface ReceivedFile {
@@ -21,6 +26,8 @@ export interface ReceivedFile {
   size: number;
   path?: string;
   timestamp: number;
+  /** See ReceivedText.remoteAddr. */
+  remoteAddr?: string;
 }
 
 export interface SendProgress {

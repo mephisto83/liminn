@@ -10,6 +10,14 @@ export interface ReceivedText {
   from: string;
   text: string;
   timestamp: number;
+  /**
+   * The sender's IP as observed on the socket. Forwarded so the renderer
+   * can synthesize a peer entry when a message arrives from a host that
+   * mDNS hasn't discovered — otherwise the message is received but has
+   * nowhere to appear in the UI. May be IPv6-mapped (`::ffff:1.2.3.4`);
+   * we normalize the mapped form before forwarding.
+   */
+  remoteAddr?: string;
 }
 
 export interface ReceivedFile {
@@ -19,6 +27,17 @@ export interface ReceivedFile {
   size: number;
   path: string;
   timestamp: number;
+  /** See ReceivedText.remoteAddr. */
+  remoteAddr?: string;
+}
+
+function normalizeRemoteAddr(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  // Node sockets often report IPv4 traffic as `::ffff:192.168.1.5` when the
+  // listener is dual-stack. Strip the prefix so the renderer gets a clean
+  // IPv4 string that it can actually POST back to.
+  if (raw.startsWith('::ffff:')) return raw.slice('::ffff:'.length);
+  return raw;
 }
 
 type OnTextReceived = (item: ReceivedText) => void;
@@ -63,7 +82,8 @@ export class TransferServer {
 
     this.app.post('/api/text', (req, res) => {
       const { from, text } = req.body;
-      console.log(`[recv-text] POST /api/text from=${from} remoteAddr=${req.socket.remoteAddress} bytes=${text?.length ?? 0}`);
+      const remoteAddr = normalizeRemoteAddr(req.socket.remoteAddress);
+      console.log(`[recv-text] POST /api/text from=${from} remoteAddr=${remoteAddr} bytes=${text?.length ?? 0}`);
       if (!text) {
         console.log('[recv-text] rejected: no text in body');
         res.status(400).json({ error: 'No text provided' });
@@ -74,6 +94,7 @@ export class TransferServer {
         from: from || 'Unknown',
         text,
         timestamp: Date.now(),
+        remoteAddr,
       };
       if (this.onTextReceived) {
         this.onTextReceived(item);
@@ -96,6 +117,7 @@ export class TransferServer {
         size: req.file.size,
         path: req.file.path,
         timestamp: Date.now(),
+        remoteAddr: normalizeRemoteAddr(req.socket.remoteAddress),
       };
       if (this.onFileReceived) this.onFileReceived(item);
       res.json({ ok: true });
