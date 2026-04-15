@@ -21,8 +21,6 @@ interface ToastData {
   type: 'success' | 'info' | 'error';
 }
 
-const isElectron = typeof window !== 'undefined' && window.liminn;
-
 export default function App() {
   const [peers, setPeers] = useState<Peer[]>([]);
   const [selectedPeer, setSelectedPeer] = useState<Peer | null>(null);
@@ -50,7 +48,7 @@ export default function App() {
   }, [peers]);
 
   useEffect(() => {
-    if (!isElectron) return;
+    if (typeof window === 'undefined' || !window.liminn) return;
 
     window.liminn.getDeviceName().then(setDeviceName);
     window.liminn.getPeers().then((initial) => {
@@ -111,7 +109,7 @@ export default function App() {
   }
 
   const handleSendText = async (text: string) => {
-    if (!selectedPeer || !isElectron) return;
+    if (!selectedPeer || !window.liminn) return;
     const result = await window.liminn.sendText(selectedPeer.id, text);
     if (result.ok) {
       addMessage(selectedPeer.id, {
@@ -127,7 +125,7 @@ export default function App() {
   };
 
   const handleSendFile = async () => {
-    if (!selectedPeer || !isElectron) return;
+    if (!selectedPeer || !window.liminn) return;
     const result = await window.liminn.sendFile(selectedPeer.id);
     if (result.ok && result.filename) {
       addMessage(selectedPeer.id, {
