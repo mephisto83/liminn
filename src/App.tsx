@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Peer, ReceivedText, ReceivedFile, SendProgress } from './types';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
@@ -30,6 +30,7 @@ export default function App() {
   const [deviceName, setDeviceName] = useState('This Device');
   const [toasts, setToasts] = useState<ToastData[]>([]);
   const [sendProgress, setSendProgress] = useState<Record<string, number>>({});
+  const peersRef = useRef<Peer[]>([]);
 
   const addToast = useCallback((message: string, type: ToastData['type'] = 'info') => {
     const id = `toast-${Date.now()}`;
@@ -45,12 +46,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    peersRef.current = peers;
+  }, [peers]);
+
+  useEffect(() => {
     if (!isElectron) return;
 
     window.liminn.getDeviceName().then(setDeviceName);
-    window.liminn.getPeers().then(setPeers);
+    window.liminn.getPeers().then((initial) => {
+      peersRef.current = initial;
+      setPeers(initial);
+    });
 
     window.liminn.onPeersUpdated((updatedPeers) => {
+      peersRef.current = updatedPeers;
       setPeers(updatedPeers);
     });
 
@@ -97,7 +106,7 @@ export default function App() {
   }, [addMessage, addToast]);
 
   function findPeerIdByName(name: string): string | null {
-    const peer = peers.find((p) => p.name === name);
+    const peer = peersRef.current.find((p) => p.name === name);
     return peer?.id || null;
   }
 
