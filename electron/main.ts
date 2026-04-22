@@ -5,16 +5,47 @@ import fs from 'fs';
 import { Discovery, Peer } from './discovery';
 import { TransferServer, ReceivedText, ReceivedFile } from './server';
 import { loadIdentity, saveNickname, Identity } from './identity';
+import { ConversationStore, StoredMessage } from './conversations';
+import { pickReachableAddress } from './reachability';
 
 let mainWindow: BrowserWindow | null = null;
 let discovery: Discovery | null = null;
 let transferServer: TransferServer | null = null;
 let currentPeers: Peer[] = [];
 let identity: Identity | null = null;
+let conversations: ConversationStore | null = null;
 const receivedTexts: ReceivedText[] = [];
 const receivedFiles: ReceivedFile[] = [];
 
+// Cap the in-memory receive buffers. The persisted conversation log
+// under `<userData>/conversations.json` is the long-term history — these
+// arrays are just the short-term surface exposed via `get-received-items`
+// (unused by the current renderer but still part of the LiminnAPI
+// contract). Left uncapped, they grew without bound.
+const RECEIVE_BUFFER_MAX = 500;
+
+function peerKeyFromIncoming(fromId: string | undefined, from: string): string {
+  // Mirror the renderer's key convention in `App.tsx` so the persisted
+  // peerId matches what live `messages` state would use — that way a
+  // re-hydrated thread doesn't split into its own bucket.
+  return fromId && fromId.length > 0 ? fromId : `synthetic-${from}`;
+}
+
+function randomSuffix(): string {
+  return Math.random().toString(36).slice(2, 7);
+}
+
 const SERVER_PORT = 0; // auto-assign
+
+/**
+ * Cache of `peerId -> last-known reachable address`. Populated by
+ * `pickReachableAddress`, consulted by the send helpers, and evicted on
+ * any send/probe failure. Exists because bonjour advertises every IP the
+ * host has (VPN, Docker bridge, link-local) and the order is arbitrary —
+ * without this, sends blindly hit `addresses[0]` and fail silently
+ * whenever that address isn't routable.
+ */
+const reachableAddressCache = new Map<string, string>();
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -50,11 +81,33 @@ async function startServices(): Promise<void> {
 
   transferServer.onText((item) => {
     receivedTexts.unshift(item);
+    if (receivedTexts.length > RECEIVE_BUFFER_MAX) receivedTexts.length = RECEIVE_BUFFER_MAX;
+    conversations?.append({
+      id: item.id,
+      peerId: peerKeyFromIncoming(item.fromId, item.from),
+      direction: 'received',
+      type: 'text',
+      from: item.from,
+      content: item.text,
+      timestamp: item.timestamp,
+    });
     mainWindow?.webContents.send('text-received', item);
   });
 
   transferServer.onFile((item) => {
     receivedFiles.unshift(item);
+    if (receivedFiles.length > RECEIVE_BUFFER_MAX) receivedFiles.length = RECEIVE_BUFFER_MAX;
+    conversations?.append({
+      id: item.id,
+      peerId: peerKeyFromIncoming(item.fromId, item.from),
+      direction: 'received',
+      type: 'file',
+      from: item.from,
+      content: item.filename,
+      timestamp: item.timestamp,
+      fileSize: item.size,
+      filePath: item.path,
+    });
     mainWindow?.webContents.send('file-received', item);
   });
 
@@ -62,12 +115,33 @@ async function startServices(): Promise<void> {
   discovery.start((peers) => {
     currentPeers = peers;
     mainWindow?.webContents.send('peers-updated', peers);
+
+    // Drop cached addresses for peers that disappeared so a returning
+    // peer on a new network path isn't stuck to a stale pick.
+    const currentIds = new Set(peers.map((p) => p.id));
+    for (const id of reachableAddressCache.keys()) {
+      if (!currentIds.has(id)) reachableAddressCache.delete(id);
+    }
+
+    // Warm the cache so the first user-initiated send doesn't pay
+    // probe latency (and, more importantly, doesn't silently fail when
+    // addresses[0] is unroutable).
+    for (const peer of peers) {
+      if (!reachableAddressCache.has(peer.id)) {
+        void pickReachableAddress(peer, reachableAddressCache);
+      }
+    }
   });
 }
 
-function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
+async function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
+  const addr = await pickReachableAddress(peer, reachableAddressCache);
+  if (!addr) {
+    console.error(`[send-text] no reachable address for peer=${peer.name}`);
+    return false;
+  }
+
   return new Promise((resolve) => {
-    const addr = peer.addresses[0];
     // `from` is the user-visible nickname (what the other side shows as
     // the sender label). `fromId` is the machineId — the stable key the
     // receiver uses to group this message into the conversation, even
@@ -103,10 +177,15 @@ function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
     );
     req.on('error', (err) => {
       console.error(`[send-text] request error for ${addr}:${peer.port} ->`, err.message);
+      // Invalidate the cache so the next send re-probes — the address
+      // that was reachable at discovery time may have since dropped
+      // (network switched, peer moved).
+      reachableAddressCache.delete(peer.id);
       resolve(false);
     });
     req.on('timeout', () => {
       console.error(`[send-text] request timeout after 10s for ${addr}:${peer.port}`);
+      reachableAddressCache.delete(peer.id);
       req.destroy();
     });
     req.write(postData);
@@ -114,9 +193,14 @@ function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
   });
 }
 
-function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
+async function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
+  const addr = await pickReachableAddress(peer, reachableAddressCache);
+  if (!addr) {
+    console.error(`[send-file] no reachable address for peer=${peer.name}`);
+    return false;
+  }
+
   return new Promise((resolve) => {
-    const addr = peer.addresses[0];
     const fileName = path.basename(filePath);
     const fileStream = fs.createReadStream(filePath);
     const fileSize = fs.statSync(filePath).size;
@@ -157,7 +241,11 @@ function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
       },
     );
 
-    req.on('error', () => resolve(false));
+    req.on('error', (err) => {
+      console.error(`[send-file] request error for ${addr}:${peer.port} ->`, err.message);
+      reachableAddressCache.delete(peer.id);
+      resolve(false);
+    });
 
     req.write(header);
 
@@ -222,6 +310,17 @@ function setupIpc(): void {
     const peer = currentPeers.find((p) => p.id === peerId);
     if (!peer) return { ok: false, error: 'Peer not found' };
     const ok = await sendTextToPeer(peer, text);
+    if (ok) {
+      conversations?.append({
+        id: `sent-${Date.now()}-${randomSuffix()}`,
+        peerId: peer.id,
+        direction: 'sent',
+        type: 'text',
+        from: identity?.nickname ?? require('os').hostname(),
+        content: text,
+        timestamp: Date.now(),
+      });
+    }
     return { ok };
   });
 
@@ -235,8 +334,31 @@ function setupIpc(): void {
     const peer = currentPeers.find((p) => p.id === peerId);
     if (!peer) return { ok: false, error: 'Peer not found' };
 
-    const ok = await sendFileToPeer(peer, result.filePaths[0]);
-    return { ok, filename: path.basename(result.filePaths[0]) };
+    const chosenPath = result.filePaths[0];
+    const ok = await sendFileToPeer(peer, chosenPath);
+    const filename = path.basename(chosenPath);
+    if (ok) {
+      const stat = fs.statSync(chosenPath);
+      conversations?.append({
+        id: `sent-${Date.now()}-${randomSuffix()}`,
+        peerId: peer.id,
+        direction: 'sent',
+        type: 'file',
+        from: identity?.nickname ?? require('os').hostname(),
+        content: filename,
+        timestamp: Date.now(),
+        fileSize: stat.size,
+      });
+    }
+    return { ok, filename };
+  });
+
+  ipcMain.handle('get-conversations', (): StoredMessage[] => conversations?.all() ?? []);
+
+  ipcMain.handle('rekey-conversations', (_event, oldPeerId: string, newPeerId: string) => {
+    if (typeof oldPeerId !== 'string' || typeof newPeerId !== 'string') return { ok: false };
+    conversations?.rekey(oldPeerId, newPeerId);
+    return { ok: true };
   });
 
   ipcMain.handle('open-file', async (_event, filePath: string) => {
@@ -255,6 +377,10 @@ app.whenReady().then(async () => {
   // sees the real values, not the hostname fallback. startServices reads
   // from `identity` for the Discovery constructor.
   identity = loadIdentity(app.getPath('userData'));
+  // Conversation log is loaded synchronously so the first renderer call
+  // to get-conversations after boot sees prior history, not an empty
+  // array followed by a late population.
+  conversations = new ConversationStore(app.getPath('userData'));
 
   setupIpc();
   createWindow();

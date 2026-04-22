@@ -45,6 +45,18 @@ export interface SendProgress {
   done: boolean;
 }
 
+export interface StoredMessage {
+  id: string;
+  peerId: string;
+  direction: 'sent' | 'received';
+  type: 'text' | 'file';
+  from: string;
+  content: string;
+  timestamp: number;
+  fileSize?: number;
+  filePath?: string;
+}
+
 export interface LiminnAPI {
   getPeers: () => Promise<Peer[]>;
   sendText: (peerId: string, text: string) => Promise<{ ok: boolean; error?: string }>;
@@ -53,12 +65,19 @@ export interface LiminnAPI {
   getNickname: () => Promise<string>;
   setNickname: (nickname: string) => Promise<{ ok: boolean; error?: string; nickname?: string }>;
   getReceivedItems: () => Promise<{ texts: ReceivedText[]; files: ReceivedFile[] }>;
+  getConversations: () => Promise<StoredMessage[]>;
+  rekeyConversations: (oldPeerId: string, newPeerId: string) => Promise<{ ok: boolean }>;
   openFile: (filePath: string) => Promise<void>;
   openReceivedFolder: () => Promise<void>;
-  onPeersUpdated: (callback: (peers: Peer[]) => void) => void;
-  onTextReceived: (callback: (item: ReceivedText) => void) => void;
-  onFileReceived: (callback: (item: ReceivedFile) => void) => void;
-  onSendProgress: (callback: (progress: SendProgress) => void) => void;
+  /**
+   * Subscribe to an IPC event stream. The returned function removes the
+   * registered listener — callers should invoke it in React cleanup so
+   * unmounts (and Strict Mode double-effects) don't stack handlers.
+   */
+  onPeersUpdated: (callback: (peers: Peer[]) => void) => () => void;
+  onTextReceived: (callback: (item: ReceivedText) => void) => () => void;
+  onFileReceived: (callback: (item: ReceivedFile) => void) => () => void;
+  onSendProgress: (callback: (progress: SendProgress) => void) => () => void;
 }
 
 declare global {

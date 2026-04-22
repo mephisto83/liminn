@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import App from './App';
-import type { Peer, ReceivedText, LiminnAPI } from './types';
+import type { Peer, ReceivedText, LiminnAPI, StoredMessage } from './types';
 
 // Peer names appear in both the sidebar (`.peer-name`) and the chat
 // header (`<h2>` in ChatArea) once a thread is open. Scope sidebar-
@@ -21,12 +22,15 @@ describe('App peer-keyed message routing', () => {
   let peersUpdatedCb: ((peers: Peer[]) => void) | null = null;
   let textReceivedCb: ((item: ReceivedText) => void) | null = null;
   let setNickname: LiminnAPI['setNickname'];
+  let rekeyConversations: ReturnType<typeof vi.fn<LiminnAPI['rekeyConversations']>>;
 
   beforeEach(() => {
     peersUpdatedCb = null;
     textReceivedCb = null;
     setNickname = vi.fn(async (_nickname: string) => ({ ok: true, nickname: 'Renamed' }));
+    rekeyConversations = vi.fn(async () => ({ ok: true }));
 
+    const noop = () => undefined;
     const liminn: LiminnAPI = {
       getPeers: async () => [],
       sendText: async () => ({ ok: true }),
@@ -35,16 +39,20 @@ describe('App peer-keyed message routing', () => {
       getNickname: async () => 'TestMachine',
       setNickname,
       getReceivedItems: async () => ({ texts: [], files: [] }),
+      getConversations: async () => [],
+      rekeyConversations,
       openFile: async () => undefined,
       openReceivedFolder: async () => undefined,
       onPeersUpdated: (cb) => {
         peersUpdatedCb = cb;
+        return noop;
       },
       onTextReceived: (cb) => {
         textReceivedCb = cb;
+        return noop;
       },
-      onFileReceived: () => undefined,
-      onSendProgress: () => undefined,
+      onFileReceived: () => noop,
+      onSendProgress: () => noop,
     };
 
     window.liminn = liminn;
@@ -276,6 +284,132 @@ describe('App peer-keyed message routing', () => {
     });
 
     expect(screen.getByText('Stranger')).toBeInTheDocument();
+  });
+
+  it('hydrates persisted conversations into the live message state on mount', async () => {
+    const stored: StoredMessage[] = [
+      {
+        id: 'hist-1',
+        peerId: alice.id,
+        direction: 'received',
+        type: 'text',
+        from: 'Alice-Studio',
+        content: 'hello from yesterday',
+        timestamp: 1_700_000_000_000,
+      },
+      {
+        id: 'hist-2',
+        peerId: alice.id,
+        direction: 'sent',
+        type: 'text',
+        from: 'TestMachine',
+        content: 'and my reply',
+        timestamp: 1_700_000_001_000,
+      },
+    ];
+    window.liminn.getConversations = async () => stored;
+
+    render(<App />);
+    await screen.findByText('TestMachine');
+
+    act(() => {
+      peersUpdatedCb!([alice]);
+    });
+
+    fireEvent.click(await screen.findByText('Alice-Studio'));
+    expect(await screen.findByText('hello from yesterday')).toBeInTheDocument();
+    expect(screen.getByText('and my reply')).toBeInTheDocument();
+  });
+
+  it('reconstructs a synthetic peer row from a hydrated synthetic-keyed message', async () => {
+    // Previous session received a message from Bob before mDNS resolved
+    // him — stored under synthetic-Bob-Desktop. On this startup Bob still
+    // isn't on the network; the thread must still be selectable.
+    window.liminn.getConversations = async () => [
+      {
+        id: 'hist-bob',
+        peerId: 'synthetic-Bob-Desktop',
+        direction: 'received',
+        type: 'text',
+        from: 'Bob-Desktop',
+        content: 'offline message',
+        timestamp: 1_700_000_000_000,
+      },
+    ];
+
+    render(<App />);
+    await screen.findByText('TestMachine');
+
+    fireEvent.click(await sidebar().findByText('Bob-Desktop'));
+    expect(await screen.findByText('offline message')).toBeInTheDocument();
+  });
+
+  it('does not duplicate hydrated messages under React Strict Mode double-mount', async () => {
+    const stored: StoredMessage[] = [
+      {
+        id: 'hist-dup',
+        peerId: alice.id,
+        direction: 'received',
+        type: 'text',
+        from: 'Alice-Studio',
+        content: 'only once please',
+        timestamp: 1_700_000_000_000,
+      },
+    ];
+    window.liminn.getConversations = async () => stored;
+
+    // <StrictMode> intentionally runs mount effects twice, which would
+    // otherwise call getConversations → setMessages twice and duplicate
+    // every persisted entry if the merge weren't id-deduped.
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await screen.findByText('TestMachine');
+
+    act(() => {
+      peersUpdatedCb!([alice]);
+    });
+
+    fireEvent.click(await screen.findByText('Alice-Studio'));
+    await screen.findByText('only once please');
+
+    expect(screen.getAllByText('only once please')).toHaveLength(1);
+  });
+
+  it('calls rekeyConversations when a synthetic thread migrates to a real machineId', async () => {
+    render(<App />);
+    await screen.findByText('TestMachine');
+
+    // Legacy-style orphan arrives from Bob before mDNS knows him.
+    act(() => {
+      textReceivedCb!({
+        id: 'msg-legacy',
+        from: 'Bob-Desktop',
+        text: 'hi',
+        timestamp: Date.now(),
+        remoteAddr: '192.168.1.50',
+      });
+    });
+    await sidebar().findByText('Bob-Desktop');
+
+    // mDNS resolves Bob — migration should fire rekeyConversations.
+    const bob: Peer = {
+      id: 'bob-machine-uuid',
+      name: 'Bob-Desktop',
+      host: 'bob.local',
+      port: 23456,
+      addresses: ['192.168.1.50'],
+      platform: 'win32',
+    };
+    act(() => {
+      peersUpdatedCb!([bob]);
+    });
+
+    await waitFor(() => {
+      expect(rekeyConversations).toHaveBeenCalledWith('synthetic-Bob-Desktop', bob.id);
+    });
   });
 
   it('sends the nickname change through the IPC bridge when the sidebar label is edited', async () => {

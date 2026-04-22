@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Peer, ReceivedText, ReceivedFile, SendProgress } from './types';
+import { Peer, ReceivedText, ReceivedFile, SendProgress, StoredMessage } from './types';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import EmptyState from './components/EmptyState';
@@ -92,6 +92,84 @@ export default function App() {
     window.liminn.getDeviceName().then(setDeviceName);
     window.liminn.getPeers().then(setPeers);
 
+    // Hydrate conversation history from the main-process log. Keyed by
+    // `peerId` (machineId when known, `synthetic-<name>` otherwise), which
+    // matches the live message bucket so in-session sends append to the
+    // same thread, and the existing synthetic→real migration in
+    // `onPeersUpdated` below still works against the hydrated state.
+    window.liminn.getConversations().then((stored: StoredMessage[]) => {
+      setMessages((prev) => {
+        const grouped: Record<string, Message[]> = { ...prev };
+        // Dedup by id across (a) React Strict Mode's double-mount, which
+        // would otherwise call getConversations twice, and (b) a live
+        // message racing hydration — both paths can try to add the same
+        // entry. Sorting by timestamp keeps the thread in order even
+        // when a live message slipped in before hydration resolved.
+        for (const peerId of Object.keys(grouped)) {
+          grouped[peerId] = [...grouped[peerId]];
+        }
+
+        for (const s of stored) {
+          const entry: Message = {
+            id: s.id,
+            type:
+              s.type === 'text'
+                ? s.direction === 'sent'
+                  ? 'text-sent'
+                  : 'text-received'
+                : s.direction === 'sent'
+                  ? 'file-sent'
+                  : 'file-received',
+            from: s.from,
+            content: s.content,
+            timestamp: s.timestamp,
+            filePath: s.filePath,
+            fileSize: s.fileSize,
+          };
+          const bucket = grouped[s.peerId] ?? [];
+          if (bucket.some((m) => m.id === entry.id)) continue;
+          bucket.push(entry);
+          grouped[s.peerId] = bucket;
+        }
+
+        for (const peerId of Object.keys(grouped)) {
+          grouped[peerId].sort((a, b) => a.timestamp - b.timestamp);
+        }
+        return grouped;
+      });
+
+      // Rehydrate synthetic peer entries so persisted threads from
+      // unresolved senders are selectable on startup — otherwise the
+      // thread exists in `messages` but has no Sidebar row until mDNS
+      // catches up (which it may never, for a LAN-gone-offline peer).
+      const syntheticsToAdd = new Map<string, Peer>();
+      for (const s of stored) {
+        if (!s.peerId.startsWith('synthetic-')) continue;
+        if (syntheticsToAdd.has(s.peerId)) continue;
+        syntheticsToAdd.set(s.peerId, {
+          id: s.peerId,
+          name: s.peerId.slice('synthetic-'.length),
+          host: s.peerId.slice('synthetic-'.length),
+          port: 0,
+          addresses: [],
+          platform: 'synthetic',
+        });
+      }
+      if (syntheticsToAdd.size > 0) {
+        setPeers((prev) => {
+          const existingIds = new Set(prev.map((p) => p.id));
+          const existingNames = new Set(prev.map((p) => p.name));
+          const additions: Peer[] = [];
+          for (const [, syn] of syntheticsToAdd) {
+            if (existingIds.has(syn.id)) continue;
+            if (existingNames.has(syn.name)) continue;
+            additions.push(syn);
+          }
+          return additions.length > 0 ? [...prev, ...additions] : prev;
+        });
+      }
+    });
+
     // mDNS peer updates replace the discovered set, but we merge any
     // synthetic peers (from orphan messages) whose id AND name aren't in
     // the incoming list — otherwise a periodic peer refresh would wipe
@@ -101,7 +179,7 @@ export default function App() {
     // we migrate `messages[synthetic-<name>]` → `messages[realId]` so the
     // thread continues under the stable key instead of leaving a dangling
     // bucket.
-    window.liminn.onPeersUpdated((mdnsPeers) => {
+    const unsubPeers = window.liminn.onPeersUpdated((mdnsPeers) => {
       setPeers((prev) => {
         const mdnsIds = new Set(mdnsPeers.map((p) => p.id));
         const mdnsNames = new Set(mdnsPeers.map((p) => p.name));
@@ -126,6 +204,10 @@ export default function App() {
             }
             next[real.id] = next[synthKey];
             delete next[synthKey];
+            // Mirror the in-memory migration onto the persisted log so
+            // the synthetic bucket doesn't re-hydrate on next launch.
+            // Fire-and-forget — the in-memory state is already correct.
+            void window.liminn?.rekeyConversations(synthKey, real.id);
           }
         }
         return mutated ? next : prev;
@@ -147,7 +229,7 @@ export default function App() {
       });
     });
 
-    window.liminn.onTextReceived((item: ReceivedText) => {
+    const unsubText = window.liminn.onTextReceived((item: ReceivedText) => {
       const peerKey = item.fromId || `synthetic-${item.from}`;
       ensurePeer(peerKey, item.from, item.remoteAddr);
       addMessage(peerKey, {
@@ -160,7 +242,7 @@ export default function App() {
       addToast(`Message from ${item.from}`, 'info');
     });
 
-    window.liminn.onFileReceived((item: ReceivedFile) => {
+    const unsubFile = window.liminn.onFileReceived((item: ReceivedFile) => {
       const peerKey = item.fromId || `synthetic-${item.from}`;
       ensurePeer(peerKey, item.from, item.remoteAddr);
       addMessage(peerKey, {
@@ -174,7 +256,7 @@ export default function App() {
       addToast(`File received: ${item.filename}`, 'success');
     });
 
-    window.liminn.onSendProgress((progress: SendProgress) => {
+    const unsubProgress = window.liminn.onSendProgress((progress: SendProgress) => {
       setSendProgress((prev) => ({
         ...prev,
         [progress.peerId]: progress.done ? -1 : progress.percent,
@@ -189,6 +271,13 @@ export default function App() {
         }, 1000);
       }
     });
+
+    return () => {
+      unsubPeers?.();
+      unsubText?.();
+      unsubFile?.();
+      unsubProgress?.();
+    };
   }, [addMessage, addToast, ensurePeer]);
 
   const handleSetNickname = useCallback(
