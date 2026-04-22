@@ -134,13 +134,7 @@ async function startServices(): Promise<void> {
   });
 }
 
-async function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
-  const addr = await pickReachableAddress(peer, reachableAddressCache);
-  if (!addr) {
-    console.error(`[send-text] no reachable address for peer=${peer.name}`);
-    return false;
-  }
-
+function postTextOnce(peer: Peer, addr: string, text: string): Promise<boolean> {
   return new Promise((resolve) => {
     // `from` is the user-visible nickname (what the other side shows as
     // the sender label). `fromId` is the machineId — the stable key the
@@ -177,15 +171,10 @@ async function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
     );
     req.on('error', (err) => {
       console.error(`[send-text] request error for ${addr}:${peer.port} ->`, err.message);
-      // Invalidate the cache so the next send re-probes — the address
-      // that was reachable at discovery time may have since dropped
-      // (network switched, peer moved).
-      reachableAddressCache.delete(peer.id);
       resolve(false);
     });
     req.on('timeout', () => {
       console.error(`[send-text] request timeout after 10s for ${addr}:${peer.port}`);
-      reachableAddressCache.delete(peer.id);
       req.destroy();
     });
     req.write(postData);
@@ -193,12 +182,52 @@ async function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
   });
 }
 
-async function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
-  const addr = await pickReachableAddress(peer, reachableAddressCache);
-  if (!addr) {
-    console.error(`[send-file] no reachable address for peer=${peer.name}`);
-    return false;
+async function sendTextToPeer(peer: Peer, text: string): Promise<boolean> {
+  const primary = await pickReachableAddress(peer, reachableAddressCache);
+  if (primary) {
+    if (await postTextOnce(peer, primary, text)) return true;
+    // POST failed on the address that answered /api/ping — network
+    // moved between probe and send, or the peer went down. Drop the
+    // cache entry and fall through to blind retries below.
+    console.warn(`[send-text] primary address ${primary} failed after successful probe; falling back to other addresses`);
+    reachableAddressCache.delete(peer.id);
+  } else {
+    // Probe found nothing. Could mean the peer is truly unreachable, or
+    // an unusual firewall blocks GET /api/ping but permits POST
+    // /api/text (rare). Try each advertised address anyway — giving up
+    // without attempting is worse UX than one-retry-per-address.
+    console.warn(
+      `[send-text] probe found no reachable address for ${peer.name}; attempting each advertised address blindly`,
+    );
   }
+
+  for (const addr of peer.addresses) {
+    if (primary && addr === primary) continue; // already tried
+    if (await postTextOnce(peer, addr, text)) {
+      reachableAddressCache.set(peer.id, addr);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
+  // Files use a multipart stream that can't be replayed on error, so
+  // we don't iterate addresses like text does. Fall back to
+  // peer.addresses[0] when probe finds nothing — same rationale as
+  // text sends: one attempt with logging beats silent refusal.
+  let addr = await pickReachableAddress(peer, reachableAddressCache);
+  if (!addr) {
+    if (peer.addresses.length === 0) {
+      console.error(`[send-file] no addresses advertised for peer=${peer.name}`);
+      return false;
+    }
+    addr = peer.addresses[0];
+    console.warn(
+      `[send-file] probe found no reachable address for ${peer.name}; attempting ${addr} blindly`,
+    );
+  }
+  const chosenAddr = addr;
 
   return new Promise((resolve) => {
     const fileName = path.basename(filePath);
@@ -224,7 +253,7 @@ async function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
 
     const req = http.request(
       {
-        hostname: addr,
+        hostname: chosenAddr,
         port: peer.port,
         path: '/api/file',
         method: 'POST',
@@ -242,7 +271,7 @@ async function sendFileToPeer(peer: Peer, filePath: string): Promise<boolean> {
     );
 
     req.on('error', (err) => {
-      console.error(`[send-file] request error for ${addr}:${peer.port} ->`, err.message);
+      console.error(`[send-file] request error for ${chosenAddr}:${peer.port} ->`, err.message);
       reachableAddressCache.delete(peer.id);
       resolve(false);
     });

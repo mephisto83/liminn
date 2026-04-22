@@ -36,6 +36,14 @@ First launch takes a moment while the app writes its identity file to the OS's `
 
 On first send, the OS may ask whether to allow Liminn to accept incoming connections on private networks. Say yes — without it, peers can discover you but can't deliver messages.
 
+**Windows specifically**: the NSIS installer adds an inbound firewall rule for Liminn automatically. If you're running a dev build (`npm run electron:dev` / `npm run start`) rather than the installed `.exe`, NSIS isn't in the loop — run this once as Administrator on the Windows machine:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\allow-firewall.ps1
+```
+
+Symptom that this hasn't been done: other peers can send to each other fine, but sends to the Windows machine silently fail (log shows `[send-text] request error ... -> connect ETIMEDOUT`). Peers can still *discover* the Windows machine — discovery is UDP multicast — but the inbound TCP POST gets dropped by Windows Defender Firewall.
+
 ## Development
 
 Requires Node.js 20+ and npm.
