@@ -149,17 +149,39 @@ export class TransferServer {
     this.onFileReceived = callback;
   }
 
+  /**
+   * Bind on `port` (or ephemeral if `port === 0`). If a non-zero port
+   * is passed and already in use (EADDRINUSE), fall back to ephemeral
+   * once and return the port that actually bound — callers use the
+   * return value to persist the port for next launch, so the fallback
+   * is what gets remembered.
+   */
   start(port: number): Promise<number> {
     return new Promise((resolve, reject) => {
-      this.server = this.app.listen(port, '0.0.0.0', () => {
-        const addr = this.server?.address();
-        if (addr && typeof addr === 'object') {
-          resolve(addr.port);
-        } else {
-          reject(new Error('Failed to get server address'));
-        }
-      });
-      this.server.on('error', reject);
+      const tryListen = (p: number, allowFallback: boolean) => {
+        const server = this.app.listen(p, '0.0.0.0');
+        this.server = server;
+
+        server.once('listening', () => {
+          const addr = server.address();
+          if (addr && typeof addr === 'object') {
+            resolve(addr.port);
+          } else {
+            reject(new Error('Failed to get server address'));
+          }
+        });
+
+        server.once('error', (err: NodeJS.ErrnoException) => {
+          if (err.code === 'EADDRINUSE' && allowFallback) {
+            console.warn(`[server] port ${p} in use, falling back to ephemeral`);
+            tryListen(0, false);
+          } else {
+            reject(err);
+          }
+        });
+      };
+
+      tryListen(port, port !== 0);
     });
   }
 

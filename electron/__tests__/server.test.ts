@@ -24,6 +24,35 @@ describe('TransferServer HTTP API', () => {
     });
   });
 
+  describe('port preference', () => {
+    it('binds to the requested port when free and returns it', async () => {
+      const other = new TransferServer();
+      const bound = await other.start(0);
+      other.stop();
+      // brief moment for the OS to release the port
+      await new Promise((r) => setTimeout(r, 50));
+
+      const preferred = new TransferServer();
+      const boundAgain = await preferred.start(bound);
+      expect(boundAgain).toBe(bound);
+      preferred.stop();
+    });
+
+    it('falls back to ephemeral and returns the new port when the preferred port is taken', async () => {
+      // `server` (from outer beforeEach) holds a port. A second instance
+      // asked to bind that same port must EADDRINUSE → fall back to 0.
+      const currentAddr = (server as unknown as { server: import('http').Server }).server.address();
+      const occupied = typeof currentAddr === 'object' && currentAddr ? currentAddr.port : 0;
+      expect(occupied).toBeGreaterThan(0);
+
+      const second = new TransferServer();
+      const boundPort = await second.start(occupied);
+      expect(boundPort).not.toBe(occupied);
+      expect(boundPort).toBeGreaterThan(0);
+      second.stop();
+    });
+  });
+
   describe('POST /api/text', () => {
     it('accepts a valid message and invokes onTextReceived with normalized item', async () => {
       const received: ReceivedText[] = [];

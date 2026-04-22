@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { loadIdentity, saveNickname } from '../identity';
+import { loadIdentity, saveNickname, saveServerPort } from '../identity';
 
 /**
  * These tests treat `<userDataDir>/identity.json` as the unit under test —
@@ -91,5 +91,45 @@ describe('identity', () => {
     const identity = loadIdentity(nested);
     expect(fs.existsSync(path.join(nested, 'identity.json'))).toBe(true);
     expect(identity.machineId.length).toBeGreaterThan(0);
+  });
+
+  describe('serverPort', () => {
+    it('is undefined on first load (no prior value)', () => {
+      const identity = loadIdentity(dir);
+      expect(identity.serverPort).toBeUndefined();
+    });
+
+    it('saveServerPort persists the port and preserves machineId + nickname', () => {
+      const before = loadIdentity(dir);
+      const updated = saveServerPort(dir, 54321);
+
+      expect(updated.machineId).toBe(before.machineId);
+      expect(updated.nickname).toBe(before.nickname);
+      expect(updated.serverPort).toBe(54321);
+
+      const reloaded = loadIdentity(dir);
+      expect(reloaded.serverPort).toBe(54321);
+    });
+
+    it('rejects invalid ports (0, negative, non-integer, out of range)', () => {
+      loadIdentity(dir);
+      expect(() => saveServerPort(dir, 0)).toThrow();
+      expect(() => saveServerPort(dir, -1)).toThrow();
+      expect(() => saveServerPort(dir, 65536)).toThrow();
+      expect(() => saveServerPort(dir, 3.14)).toThrow();
+    });
+
+    it('drops a stored serverPort that is no longer a valid number (self-repair)', () => {
+      const identityPath = path.join(dir, 'identity.json');
+      fs.writeFileSync(
+        identityPath,
+        JSON.stringify({ machineId: 'seed-1', nickname: 'x', serverPort: 'not-a-port' }),
+        'utf8',
+      );
+
+      const identity = loadIdentity(dir);
+      expect(identity.serverPort).toBeUndefined();
+      expect(identity.machineId).toBe('seed-1');
+    });
   });
 });

@@ -146,16 +146,49 @@ export class Discovery {
       const now = Date.now();
       let changed = false;
 
-      // bonjour-service doesn't refire 'up' for records it already knows about,
-      // so lastSeen would otherwise freeze at first-discovery time and the sweep
-      // below would evict live peers. Refresh from browser.services — bonjour's
-      // authoritative live cache — before applying the staleness threshold.
+      // bonjour-service doesn't refire 'up' for records it already knows
+      // about — including when a peer restarts on a new ephemeral port.
+      // The sweep refreshes from browser.services (bonjour's authoritative
+      // live cache) so that:
+      //  - lastSeen stays current (we don't evict live peers)
+      //  - port/addresses/name track peer restarts (the old stale-port
+      //    bug: peer A restarts with a new port, peer B keeps POSTing
+      //    to the dead port until a full B-side restart)
+      //
+      // Anything actually changed is surfaced via onPeersChanged so the
+      // renderer updates its sidebar and the main process drops any
+      // cached reachable address tied to the old port.
       const services = (this.browser?.services ?? []) as Service[];
       for (const service of services) {
         const id = (service.txt as Record<string, string> | undefined)?.id;
         if (!id) continue;
         const peer = this.peers.get(id);
-        if (peer) peer.lastSeen = now;
+        if (!peer) continue;
+
+        peer.lastSeen = now;
+
+        const addresses = (service.addresses || []).filter((addr: string) => !addr.includes(':'));
+        const txt = service.txt as Record<string, string> | undefined;
+        const nextName = txt?.name || service.name;
+
+        if (peer.port !== service.port) {
+          console.log(`[discovery] peer ${peer.name} port changed ${peer.port} -> ${service.port}`);
+          peer.port = service.port;
+          changed = true;
+        }
+        if (addresses.length > 0 && addresses.join(',') !== peer.addresses.join(',')) {
+          console.log(`[discovery] peer ${peer.name} addresses changed ${peer.addresses.join(',')} -> ${addresses.join(',')}`);
+          peer.addresses = addresses;
+          changed = true;
+        }
+        if (nextName && nextName !== peer.name) {
+          peer.name = nextName;
+          changed = true;
+        }
+        if (service.host && service.host !== peer.host) {
+          peer.host = service.host;
+          changed = true;
+        }
       }
 
       for (const [id, peer] of this.peers) {

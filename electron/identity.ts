@@ -28,11 +28,20 @@ import crypto from 'crypto';
 export interface Identity {
   machineId: string;
   nickname: string;
+  /**
+   * Preferred TCP port for the transfer server. Persisted after the
+   * first successful bind so peers on the other side don't have to
+   * re-discover us every restart — stale peer caches were posting to
+   * yesterday's ephemeral port and timing out. Undefined on first
+   * launch; the caller picks an ephemeral port and writes it back.
+   */
+  serverPort?: number;
 }
 
 interface StoredIdentity {
   machineId?: unknown;
   nickname?: unknown;
+  serverPort?: unknown;
 }
 
 function defaultNickname(): string {
@@ -85,7 +94,12 @@ export function loadIdentity(userDataDir: string): Identity {
       ? stored.nickname
       : defaultNickname();
 
-  const identity: Identity = { machineId, nickname };
+  const serverPort =
+    stored && typeof stored.serverPort === 'number' && Number.isInteger(stored.serverPort) && stored.serverPort > 0 && stored.serverPort < 65536
+      ? stored.serverPort
+      : undefined;
+
+  const identity: Identity = { machineId, nickname, ...(serverPort ? { serverPort } : {}) };
 
   // Persist if anything was missing or the file didn't exist. Cheap
   // write, and we want subsequent launches to read the canonical
@@ -97,6 +111,22 @@ export function loadIdentity(userDataDir: string): Identity {
   if (needsWrite) writeIdentity(identityPath, identity);
 
   return identity;
+}
+
+/**
+ * Persist the transfer-server port alongside the existing identity so
+ * the next launch rebinds to the same port by default. Caller is
+ * responsible for only invoking this once the bind has succeeded —
+ * otherwise we'd remember a port we couldn't actually use.
+ */
+export function saveServerPort(userDataDir: string, port: number): Identity {
+  if (!Number.isInteger(port) || port <= 0 || port >= 65536) {
+    throw new Error(`Invalid server port: ${port}`);
+  }
+  const current = loadIdentity(userDataDir);
+  const next: Identity = { ...current, serverPort: port };
+  writeIdentity(path.join(userDataDir, 'identity.json'), next);
+  return next;
 }
 
 /**

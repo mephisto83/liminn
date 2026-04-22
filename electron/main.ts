@@ -4,7 +4,7 @@ import http from 'http';
 import fs from 'fs';
 import { Discovery, Peer } from './discovery';
 import { TransferServer, ReceivedText, ReceivedFile } from './server';
-import { loadIdentity, saveNickname, Identity } from './identity';
+import { loadIdentity, saveNickname, saveServerPort, Identity } from './identity';
 import { ConversationStore, StoredMessage } from './conversations';
 import { pickReachableAddress } from './reachability';
 
@@ -35,7 +35,6 @@ function randomSuffix(): string {
   return Math.random().toString(36).slice(2, 7);
 }
 
-const SERVER_PORT = 0; // auto-assign
 
 /**
  * Cache of `peerId -> last-known reachable address`. Populated by
@@ -77,7 +76,20 @@ async function startServices(): Promise<void> {
   }
 
   transferServer = new TransferServer();
-  const port = await transferServer.start(SERVER_PORT);
+  // Prefer the port we bound last time so peers with stale caches
+  // still reach us. Falls back to ephemeral if something else grabbed
+  // the port (another Liminn dev process, say), then writes whichever
+  // port we actually got back to identity.json for next launch.
+  const preferredPort = identity.serverPort ?? 0;
+  const port = await transferServer.start(preferredPort);
+  if (identity.serverPort !== port) {
+    try {
+      identity = saveServerPort(app.getPath('userData'), port);
+    } catch (err) {
+      console.warn('[main] failed to persist serverPort:', err);
+    }
+  }
+  console.log(`[main] transfer server bound on port ${port} (preferred ${preferredPort || 'ephemeral'})`);
 
   transferServer.onText((item) => {
     receivedTexts.unshift(item);
